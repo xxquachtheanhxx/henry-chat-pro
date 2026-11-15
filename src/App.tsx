@@ -1835,7 +1835,7 @@ export default function App() {
         <div className="bch-rail-group">
           <button
             type="button"
-            className="bch-rail-btn active"
+            className={`bch-rail-btn ${sidebarFilter.kind === "all" ? "active" : ""}`}
             title="Tất cả tài khoản"
             onClick={() => {
               setSidebarFilter({ kind: "all" });
@@ -1843,6 +1843,55 @@ export default function App() {
             }}
           >
             💬
+          </button>
+          <button
+            type="button"
+            className="bch-rail-btn bch-rail-add"
+            title="Tạo profile mới"
+            onClick={() => openAddAccount()}
+          >
+            ＋
+          </button>
+          {groups.length > 0 && (
+            <div className="bch-rail-groups">
+              {groups.map((g) => {
+                const active = sidebarFilter.kind === "group" && sidebarFilter.id === g.id;
+                const count = accounts.filter((a) => (a.groupIds || []).includes(g.id)).length;
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    className={`bch-rail-btn bch-rail-group-btn ${active ? "active" : ""}`}
+                    title={`Nhóm ${g.name} (${count})`}
+                    onClick={() => {
+                      setSidebarFilter(active ? { kind: "all" } : { kind: "group", id: g.id });
+                      setSidebarMode("full");
+                    }}
+                  >
+                    <span
+                      className="bch-rail-group-avatar"
+                      style={{ backgroundColor: g.color }}
+                    >
+                      {g.name.charAt(0).toUpperCase()}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <button
+            type="button"
+            className="bch-rail-btn"
+            title="Quản lý nhóm người dùng"
+            onClick={() => {
+              closeAllModals();
+              setNewGroupName("");
+              setNewGroupColor("#6366F1");
+              setEditingGroupId(null);
+              setShowGroupManager(true);
+            }}
+          >
+            ⋯
           </button>
           <button
             type="button"
@@ -2124,31 +2173,6 @@ export default function App() {
                   </div>
                 </div>
               </div>
-
-              <button
-                type="button"
-                className="bch-brand-bell-btn"
-                title={`Trung tâm thông báo (${notifications.length})`}
-                aria-label="Trung tâm thông báo"
-                onClick={openNotificationCenter}
-              >
-                🔔
-                {notifications.length > 0 && (
-                  <span className="bch-brand-bell-count">
-                    {notifications.length > 99 ? "99+" : notifications.length}
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                className="bch-brand-add-btn"
-                title="Thêm tài khoản mới"
-                aria-label="Thêm tài khoản mới"
-                onClick={() => openAddAccount()}
-              >
-                +
-              </button>
             </div>
 
             {(incomingCalls.length > 0 || alertToasts.length > 0) && (
@@ -2263,55 +2287,6 @@ export default function App() {
                 ))}
               </div>
 
-            <div className="bch-plat-section" style={{ marginTop: 6 }}>
-              <div className="bch-section-top">
-                <span className="bch-section-label">
-                  Nhóm của bạn ({groups.length})
-                </span>
-                <button
-                  type="button"
-                  className="bch-link-btn"
-                  onClick={() => {
-                    closeAllModals();
-                    setNewGroupName("");
-                    setNewGroupColor("#6366F1");
-                    setEditingGroupId(null);
-                    setShowGroupManager(true);
-                  }}
-                >
-                  + Quản lý nhóm
-                </button>
-              </div>
-              <div className="bch-plat-chips">
-                {groups.length === 0 && (
-                  <span style={{ fontSize: 11.5, color: "var(--bch-muted)" }}>
-                    Chưa có nhóm. Bấm “+ Quản lý nhóm” để tạo.
-                  </span>
-                )}
-                {groups.map((g) => (
-                  <button
-                    type="button"
-                    key={g.id}
-                    className={`bch-chip ${
-                      sidebarFilter.kind === "group" && sidebarFilter.id === g.id ? "active" : ""
-                    }`}
-                    onClick={() => setSidebarFilter({ kind: "group", id: g.id })}
-                    title={g.name}
-                  >
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: 999,
-                        backgroundColor: g.color,
-                        display: "inline-block",
-                      }}
-                    />
-                    {g.name} ({accounts.filter((a) => (a.groupIds || []).includes(g.id)).length})
-                  </button>
-                ))}
-              </div>
-            </div>
             </div>
 
             <div className="bch-accounts-container">
@@ -2479,28 +2454,6 @@ export default function App() {
 
             <div className="bch-sidebar-footer">
               <div className="bch-status-banner">{statusMessage}</div>
-              <div className="bch-footer-row">
-                <button
-                  type="button"
-                  className="bch-btn"
-                  onClick={() => {
-                    closeAllModals();
-                    setShowAddPlatform(true);
-                  }}
-                >
-                  ＋ Trang web
-                </button>
-                <button
-                  type="button"
-                  className="bch-btn"
-                  onClick={() => {
-                    closeAllModals();
-                    setShowLan(true);
-                  }}
-                >
-                  📡 Gửi file
-                </button>
-              </div>
             </div>
           </>
         )}
