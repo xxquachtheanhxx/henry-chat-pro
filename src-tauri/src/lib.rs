@@ -2528,6 +2528,14 @@ async fn open_notification_window(app: AppHandle) -> Result<(), String> {
     show_notification_window(&app)
 }
 
+#[tauri::command]
+async fn hide_notification_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("notif") {
+        let _ = win.hide();
+    }
+    Ok(())
+}
+
 /// Từ cửa sổ thông báo: mở cửa sổ chính và chọn đúng profile.
 #[tauri::command]
 async fn open_profile_from_notification(app: AppHandle, profile_id: String) -> Result<(), String> {
@@ -2701,6 +2709,7 @@ pub fn run() {
             set_privacy_mode,
             open_notification_window,
             open_profile_from_notification,
+            hide_notification_window,
             save_workspace_snapshot,
             load_workspace_snapshot,
             open_system_browser,

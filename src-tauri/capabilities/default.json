@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "Quyền cho cửa sổ chính của Henry Chat Pro. WebView của từng tài khoản chạy nội dung web từ xa nên KHÔNG được cấp quyền Tauri.",
   "windows": [
-    "main"
+    "main",
+    "notif"
   ],
   "permissions": [
     "core:default"

@@ -575,11 +575,7 @@ export default function App() {
 
   const closeInboxPanel = useCallback(() => {
     if (IS_NOTIF_WINDOW) {
-      try {
-        void getCurrentWindow().hide();
-      } catch {
-        /* bỏ qua */
-      }
+      void callTauri("hide_notification_window");
       return;
     }
     setShowInbox(false);
