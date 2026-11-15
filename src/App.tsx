@@ -156,14 +156,10 @@ export interface LanFeedItem {
   outgoing?: boolean;
 }
 
-export type SidebarMode = "full" | "collapsed";
 
 const RAIL_WIDTH = 56;
 
-const SIDEBAR_WIDTH_MAP: Record<SidebarMode, number> = {
-  full: 310,
-  collapsed: 68,
-};
+const SIDEBAR_WIDTH = 310;
 
 const CUSTOM_URL_OPTION_VALUE = "__custom_url__";
 
@@ -199,7 +195,6 @@ function webConfigJson(acc: AccountProfile | null): string {
 const LS_PLATFORMS = "bch_pro_platforms_v1";
 const LS_ACCOUNTS = "bch_pro_accounts_v1";
 const LS_GROUPS = "bch_pro_groups_v1";
-const LS_SIDEBAR = "bch_pro_sidebar_mode_v1";
 const LS_SETTINGS = "bch_pro_settings_v1";
 const LS_SELECTED = "bch_pro_selected_account_v1";
 /** Profile đã bị người dùng xoá hẳn — không tự khôi phục lại từ đĩa. */
@@ -473,9 +468,6 @@ export default function App() {
     return Array.isArray(saved) ? saved : [];
   });
 
-  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
-    localStorage.getItem(LS_SIDEBAR) === "collapsed" ? "collapsed" : "full"
-  );
 
   const [selectedAccountId, setSelectedAccountId] = useState<string>(() => {
     const saved = localStorage.getItem(LS_SELECTED);
@@ -644,14 +636,13 @@ export default function App() {
   }, [accounts]);
 
   useEffect(() => {
-    localStorage.setItem(LS_SIDEBAR, sidebarMode);
     // Đo trực tiếp mép trái vùng chat trong DOM: WebView nhúng sẽ bắt đầu đúng mốc này,
     // nên không thể đè lên rail/sidebar hay nút tạo profile dù CSS thay đổi.
     const sendWidth = () => {
       const viewport = document.querySelector(".bch-chat-viewport");
       const left = viewport
         ? Math.round(viewport.getBoundingClientRect().left)
-        : RAIL_WIDTH + SIDEBAR_WIDTH_MAP[sidebarMode];
+        : RAIL_WIDTH + SIDEBAR_WIDTH;
       if (left > 0) {
         void callTauri("set_sidebar_width", { width: left });
       }
@@ -664,7 +655,7 @@ export default function App() {
       window.clearTimeout(timer);
       window.removeEventListener("resize", sendWidth);
     };
-  }, [sidebarMode, settings.theme]);
+  }, [settings.theme]);
 
   useEffect(() => {
     saveJson(LS_SETTINGS, settings);
@@ -1041,10 +1032,10 @@ export default function App() {
       profileId: selectedAccount.id,
       profileName: selectedAccount.name,
       // Phải cộng rail, nếu không WebView sẽ phủ lên 56px cuối sidebar (vùng nút tạo profile).
-      sidebarWidth: RAIL_WIDTH + SIDEBAR_WIDTH_MAP[sidebarMode],
+      sidebarWidth: RAIL_WIDTH + SIDEBAR_WIDTH,
       webConfig: webConfigJson(selectedAccount),
     });
-  }, [anyModalOpen, selectedAccount, sidebarMode, accountUrl, flashStatus, webConfigVersion]);
+  }, [anyModalOpen, selectedAccount, accountUrl, flashStatus, webConfigVersion]);
 
   /* --------------------- Lắng nghe sự kiện từ WebView --------------------- */
   const accountsRef = useRef(accounts);
@@ -1788,7 +1779,7 @@ export default function App() {
   );
 
   const modalLeft =
-    (IS_NOTIF_WINDOW ? 0 : RAIL_WIDTH) + (sidebarMode === "collapsed" ? 68 : 310);
+    (IS_NOTIF_WINDOW ? 0 : RAIL_WIDTH) + SIDEBAR_WIDTH;
 
   const renderAvatar = (acc: AccountProfile, size: "card" | "preview") => {
     const plat = getPlatform(acc.platformId);
@@ -1829,16 +1820,9 @@ export default function App() {
   return (
     <div className={`bch-shell ${IS_NOTIF_WINDOW ? "bch-notif-window" : ""}`}>
       <nav className="bch-rail" aria-label="Điều hướng chính">
-        <button
-          type="button"
-          className="bch-rail-brand bch-rail-brand-btn"
-          title={sidebarMode === "collapsed" ? "Mở rộng danh sách" : "Thu gọn danh sách (chỉ hiện icon)"}
-          onClick={() => setSidebarMode(sidebarMode === "collapsed" ? "full" : "collapsed")}
-        >
-          <span className="bch-hamburger-line" />
-          <span className="bch-hamburger-line" />
-          <span className="bch-hamburger-line" />
-        </button>
+        <div className="bch-rail-brand" title="Henry Chat Pro">
+          <img src={logoUrl} alt="Henry Chat Pro" />
+        </div>
         <div className="bch-rail-group">
           <button
             type="button"
@@ -1848,7 +1832,6 @@ export default function App() {
               // Đóng mọi bảng đang mở để quay lại đúng khung chat
               closeAllModals();
               setSidebarFilter({ kind: "all" });
-              setSidebarMode("full");
             }}
           >
             💬
@@ -1867,7 +1850,6 @@ export default function App() {
                     onClick={() => {
                       closeAllModals();
                       setSidebarFilter(active ? { kind: "all" } : { kind: "group", id: g.id });
-                      setSidebarMode("full");
                     }}
                   >
                     <span
@@ -1965,91 +1947,8 @@ export default function App() {
           </button>
         </div>
       </nav>
-      <aside className={`bch-sidebar ${sidebarMode === "collapsed" ? "mode-collapsed" : ""}`}>
-        {sidebarMode === "collapsed" ? (
-          <>
-            <div className="bch-collapsed-icons-list">
-              {filteredAccounts.map((acc) => {
-                const plat = getPlatform(acc.platformId);
-                const isSelected = selectedAccount?.id === acc.id;
-                const notifyOn = acc.notificationsEnabled !== false;
-                const alertState = profileAlerts[acc.id];
-                const hasCall = notifyOn && Boolean(alertState?.hasIncomingCall);
-                const unreadCnt = notifyOn ? alertState?.unreadCount || 0 : 0;
-                return (
-                  <div
-                    key={acc.id}
-                    className={`bch-collapsed-profile-item ${
-                      draggedProfileId === acc.id ? "dragging" : ""
-                    } ${dragOverProfileId === acc.id ? "drag-over" : ""}`}
-                    draggable
-                    onDragStart={(e) => {
-                      setDraggedProfileId(acc.id);
-                      e.dataTransfer.effectAllowed = "move";
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (draggedProfileId && draggedProfileId !== acc.id) {
-                        setDragOverProfileId(acc.id);
-                      }
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (draggedProfileId && draggedProfileId !== acc.id) {
-                        reorderProfiles(draggedProfileId, acc.id);
-                      }
-                      setDraggedProfileId(null);
-                      setDragOverProfileId(null);
-                    }}
-                    onDragEnd={() => {
-                      setDraggedProfileId(null);
-                      setDragOverProfileId(null);
-                    }}
-                    title={`${acc.name} (${plat.name})${
-                      hasCall ? `\n📞 Đang có cuộc gọi đến: ${alertState?.caller || ""}` : ""
-                    }${unreadCnt > 0 ? `\n🔔 ${unreadCnt} tin chưa đọc` : ""}\nChuột trái: mở • Chuột phải: sửa`}
-                    onClick={() => selectAccount(acc)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      openEditAccount(acc);
-                    }}
-                  >
-                    {isSelected && <span className="bch-collapsed-active-pill" />}
-                    <button
-                      type="button"
-                      className={`bch-collapsed-avatar-btn ${isSelected ? "active" : ""} ${
-                        hasCall ? "incoming-call" : ""
-                      }`}
-                      style={{ backgroundColor: acc.avatarDataUrl ? "transparent" : plat.color }}
-                    >
-                      {acc.avatarDataUrl ? (
-                        <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
-                      ) : (
-                        `${plat.badge.slice(0, 2)}${profileInitials(acc.name).charAt(0)}`
-                      )}
-                      {hasCall ? (
-                        <span className="bch-collapsed-call-badge" title="Cuộc gọi đến">
-                          📞
-                        </span>
-                      ) : !notifyOn ? (
-                        <span className="bch-collapsed-muted-badge" title="Đã tắt thông báo">
-                          🔕
-                        </span>
-                      ) : unreadCnt > 0 ? (
-                        <span className="bch-collapsed-unread-badge">
-                          {unreadCnt > 99 ? "99+" : unreadCnt}
-                        </span>
-                      ) : null}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-
-
-          </>
-        ) : (
-          <>
+      <aside className="bch-sidebar">
+        <>
             <div className="bch-brand-header">
               <div className="bch-brand-info">
                 <img src={logoUrl} alt="Henry Chat Pro" className="bch-brand-logo" />
@@ -2355,7 +2254,6 @@ export default function App() {
               <div className="bch-status-banner">{statusMessage}</div>
             </div>
           </>
-        )}
       </aside>
 
       <main className="bch-chat-viewport">
@@ -3129,22 +3027,6 @@ export default function App() {
                   onClick={() => setSettings((prev) => ({ ...prev, theme: "system" }))}
                 >
                   🖥 Hệ thống
-                </button>
-              </div>
-              <div className="bch-footer-row" style={{ gridTemplateColumns: "1fr 1fr" }}>
-                <button
-                  type="button"
-                  className={`bch-btn ${sidebarMode === "full" ? "bch-btn-primary" : ""}`}
-                  onClick={() => setSidebarMode("full")}
-                >
-                  Danh sách đầy đủ (310px)
-                </button>
-                <button
-                  type="button"
-                  className={`bch-btn ${sidebarMode === "collapsed" ? "bch-btn-primary" : ""}`}
-                  onClick={() => setSidebarMode("collapsed")}
-                >
-                  Chỉ icon (68px)
                 </button>
               </div>
               <label
