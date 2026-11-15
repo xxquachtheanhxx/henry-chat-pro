@@ -10,6 +10,7 @@
 //! đã được loại bỏ: đó là hướng đi không khả thi và không còn thuộc phạm vi sản phẩm.
 
 mod bridge;
+mod lan;
 mod net;
 
 use serde::{Deserialize, Serialize};
@@ -2627,9 +2628,13 @@ pub fn run() {
     let state_for_setup = Arc::clone(&workspace);
     let state_for_event = Arc::clone(&workspace);
 
+    let lan_state = Arc::new(lan::LanState::new());
+
     tauri::Builder::default()
         .manage(Arc::clone(&workspace))
+        .manage(Arc::clone(&lan_state))
         .setup(move |app| {
+            lan::start(app.handle().clone(), Arc::clone(&lan_state));
             if let Ok(mut guard) = state_for_setup.app_handle.lock() {
                 *guard = Some(app.handle().clone());
             }
@@ -2791,6 +2796,11 @@ pub fn run() {
             open_notification_window,
             open_profile_from_notification,
             hide_notification_window,
+            lan::lan_list_peers,
+            lan::lan_get_device_name,
+            lan::lan_set_device_name,
+            lan::lan_send_text,
+            lan::lan_send_file,
             save_workspace_snapshot,
             load_workspace_snapshot,
             open_system_browser,

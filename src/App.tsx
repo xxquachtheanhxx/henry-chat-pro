@@ -131,6 +131,29 @@ export interface WorkspaceSettings {
   privacyBlockTyping: boolean;
   /** Số WebView giữ chạy đồng thời (0 = không giới hạn) */
   maxLiveWebviews: number;
+  /** Sáng / Tối / Theo hệ thống */
+  theme: ThemeMode;
+}
+
+export type ThemeMode = "light" | "dark" | "system";
+
+export interface LanPeer {
+  id: string;
+  name: string;
+  ip: string;
+  port: number;
+}
+
+export interface LanFeedItem {
+  id: string;
+  from: string;
+  to?: string;
+  text?: string;
+  fileName?: string;
+  path?: string;
+  size?: number;
+  at: number;
+  outgoing?: boolean;
 }
 
 export type SidebarMode = "full" | "collapsed";
@@ -479,6 +502,7 @@ export default function App() {
         typeof saved.privacyBlockTyping === "boolean" ? saved.privacyBlockTyping : false,
       maxLiveWebviews:
         typeof saved.maxLiveWebviews === "number" ? saved.maxLiveWebviews : 3,
+      theme: saved.theme === "light" || saved.theme === "dark" ? saved.theme : "system",
     };
   });
 
@@ -627,6 +651,164 @@ export default function App() {
       blockTyping: settings.privacyBlockTyping,
     });
   }, [settings]);
+
+  /* ------------------------------ Theme ------------------------------ */
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const resolved =
+        settings.theme === "system" ? (media.matches ? "dark" : "light") : settings.theme;
+      document.documentElement.dataset.theme = resolved;
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [settings.theme]);
+
+  /* --------------------------- Gửi file LAN --------------------------- */
+  const [showLan, setShowLan] = useState(false);
+  const [lanPeers, setLanPeers] = useState<LanPeer[]>([]);
+  const [lanPeerId, setLanPeerId] = useState("");
+  const [lanText, setLanText] = useState("");
+  const [lanFeed, setLanFeed] = useState<LanFeedItem[]>([]);
+  const [lanSending, setLanSending] = useState(false);
+  const [lanDeviceName, setLanDeviceName] = useState("");
+
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+
+    listen<LanPeer[]>("bch-lan-peers", (e) => setLanPeers(e.payload || []))
+      .then((fn) => (cancelled ? fn() : unlisteners.push(fn)))
+      .catch(() => {});
+    listen<{ from: string; text: string; at: number }>("bch-lan-message", (e) => {
+      setLanFeed((prev) =>
+        [
+          {
+            id: `lan_${e.payload.at}_${Math.random().toString(36).slice(2, 6)}`,
+            from: e.payload.from,
+            text: e.payload.text,
+            at: e.payload.at || Date.now(),
+          },
+          ...prev,
+        ].slice(0, 80)
+      );
+    })
+      .then((fn) => (cancelled ? fn() : unlisteners.push(fn)))
+      .catch(() => {});
+    listen<{ from: string; name: string; path: string; size: number; at: number }>(
+      "bch-lan-file",
+      (e) => {
+        setLanFeed((prev) =>
+          [
+            {
+              id: `lanf_${e.payload.at}_${Math.random().toString(36).slice(2, 6)}`,
+              from: e.payload.from,
+              fileName: e.payload.name,
+              path: e.payload.path,
+              size: e.payload.size,
+              at: e.payload.at || Date.now(),
+            },
+            ...prev,
+          ].slice(0, 80)
+        );
+        flashStatus(`📥 Đã nhận file "${e.payload.name}" từ ${e.payload.from}`);
+      }
+    )
+      .then((fn) => (cancelled ? fn() : unlisteners.push(fn)))
+      .catch(() => {});
+
+    void callTauri<string>("lan_get_device_name").then((n) => {
+      if (n) setLanDeviceName(n);
+    });
+    void callTauri<LanPeer[]>("lan_list_peers").then((p) => setLanPeers(p || []));
+
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [flashStatus]);
+
+  const saveLanDeviceName = async () => {
+    const name = lanDeviceName.trim();
+    if (!name) return;
+    await callTauri("lan_set_device_name", { name });
+    flashStatus(`📡 Tên thiết bị: ${name}`);
+  };
+
+  const sendLanText = async () => {
+    if (!lanPeerId || !lanText.trim()) return;
+    const target = lanPeers.find((p) => p.id === lanPeerId);
+    setLanSending(true);
+    const res = await callTauri("lan_send_text", {
+      peerId: lanPeerId,
+      text: lanText.trim(),
+    });
+    setLanSending(false);
+    if (res === null) {
+      flashStatus("⚠️ Không gửi được — thiết bị có thể đã offline");
+      return;
+    }
+    setLanFeed((prev) =>
+      [
+        {
+          id: `lan_${Date.now()}`,
+          from: "Bạn",
+          to: target?.name,
+          text: lanText.trim(),
+          at: Date.now(),
+          outgoing: true,
+        },
+        ...prev,
+      ].slice(0, 80)
+    );
+    setLanText("");
+  };
+
+  const sendLanFile = (file: File) => {
+    if (!lanPeerId) {
+      flashStatus("⚠️ Chọn thiết bị nhận trước khi gửi file");
+      return;
+    }
+    if (file.size > 80 * 1024 * 1024) {
+      flashStatus("⚠️ File lớn hơn 80 MB chưa được hỗ trợ");
+      return;
+    }
+    const target = lanPeers.find((p) => p.id === lanPeerId);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const raw = String(reader.result || "");
+      const b64 = raw.slice(raw.indexOf(",") + 1);
+      setLanSending(true);
+      const res = await callTauri("lan_send_file", {
+        peerId: lanPeerId,
+        name: file.name,
+        dataBase64: b64,
+      });
+      setLanSending(false);
+      if (res === null) {
+        flashStatus("⚠️ Gửi file thất bại — thiết bị có thể đã offline");
+        return;
+      }
+      setLanFeed((prev) =>
+        [
+          {
+            id: `lanf_${Date.now()}`,
+            from: "Bạn",
+            to: target?.name,
+            fileName: file.name,
+            size: file.size,
+            at: Date.now(),
+            outgoing: true,
+          },
+          ...prev,
+        ].slice(0, 80)
+      );
+      flashStatus(`📤 Đã gửi "${file.name}" tới ${target?.name || "thiết bị"}`);
+    };
+    reader.readAsDataURL(file);
+  };
 
   useEffect(() => {
     saveJson(LS_NOTIF, notifications.slice(0, MAX_NOTIFICATIONS));
@@ -1768,6 +1950,17 @@ export default function App() {
               <button
                 type="button"
                 className="bch-collapsed-tool-btn"
+                onClick={() => {
+                  closeAllModals();
+                  setShowLan(true);
+                }}
+                title="Gửi file / máy khác (LAN)"
+              >
+                📡
+              </button>
+              <button
+                type="button"
+                className="bch-collapsed-tool-btn"
                 onClick={openNotificationCenter}
                 title={`Trung tâm thông báo (${notifications.length})`}
               >
@@ -1893,12 +2086,12 @@ export default function App() {
                         <span>
                           {toast.isCall ? "📞" : "💬"} {toast.profileName}
                         </span>
-                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                        <span style={{ color: "var(--bch-muted)", fontWeight: 500 }}>
                           {toast.platformName}
                         </span>
                       </div>
                       <div className="bch-toast-body">
-                        <strong style={{ color: "#e2e8f0" }}>{toast.title}</strong>
+                        <strong style={{ color: "var(--bch-text)" }}>{toast.title}</strong>
                         {toast.body ? ` — ${toast.body}` : ""}
                       </div>
                     </div>
@@ -1988,7 +2181,7 @@ export default function App() {
               </div>
               <div className="bch-plat-chips">
                 {groups.length === 0 && (
-                  <span style={{ fontSize: 11.5, color: "#64748b" }}>
+                  <span style={{ fontSize: 11.5, color: "var(--bch-muted)" }}>
                     Chưa có nhóm. Bấm “+ Quản lý nhóm” để tạo.
                   </span>
                 )}
@@ -2183,6 +2376,18 @@ export default function App() {
 
             <div className="bch-sidebar-footer">
               <div className="bch-status-banner">{statusMessage}</div>
+              <button
+                type="button"
+                className="bch-btn"
+                style={{ width: "100%", marginBottom: 8 }}
+                onClick={() => {
+                  closeAllModals();
+                  setShowLan(true);
+                }}
+              >
+                📡 Gửi file & máy khác
+                {lanPeers.length > 0 ? ` • ${lanPeers.length} online` : ""}
+              </button>
               <div className="bch-footer-row">
                 <button
                   type="button"
@@ -2217,10 +2422,10 @@ export default function App() {
         {!selectedAccount ? (
           <div className="bch-stage-card">
             <div style={{ fontSize: 34, marginBottom: 8 }}>🗂️</div>
-            <h2 style={{ margin: "0 0 8px", fontSize: 17, color: "#f8fafc" }}>
+            <h2 style={{ margin: "0 0 8px", fontSize: 17, color: "var(--bch-text)" }}>
               Workspace đa tài khoản
             </h2>
-            <p style={{ margin: "0 0 14px", fontSize: 12.5, color: "#94a3b8", lineHeight: 1.6 }}>
+            <p style={{ margin: "0 0 14px", fontSize: 12.5, color: "var(--bch-muted)", lineHeight: 1.6 }}>
               Mỗi tài khoản chạy trong một phiên WebView riêng, giữ đăng nhập độc lập.
               {accounts.length === 0
                 ? " Hãy thêm tài khoản đầu tiên để bắt đầu."
@@ -2235,7 +2440,7 @@ export default function App() {
             </button>
           </div>
         ) : (
-          <div style={{ fontSize: 11.5, color: "#334155", textAlign: "center" }}>
+          <div style={{ fontSize: 11.5, color: "var(--bch-border)", textAlign: "center" }}>
             Khung chat của “{selectedAccount.name}” đang chạy trong cửa sổ WebView2 phía trên.
             <br />
             {TAURI_READY
@@ -2257,8 +2462,8 @@ export default function App() {
           <div className="bch-modal-card" style={{ maxWidth: 520 }}>
             <div className="bch-modal-header">
               <div>
-                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Thêm tài khoản</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                <h2 style={{ margin: 0, fontSize: 16, color: "var(--bch-text)" }}>Thêm tài khoản</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "var(--bch-muted)" }}>
                   Tài khoản mới có cookie &amp; localStorage riêng, không ảnh hưởng tài khoản khác.
                 </p>
               </div>
@@ -2312,7 +2517,7 @@ export default function App() {
                           border: "1px solid #334155",
                           cursor: "pointer",
                           background: newAccGroupIds.includes(g.id) ? g.color : "transparent",
-                          color: newAccGroupIds.includes(g.id) ? "#fff" : "#cbd5e1",
+                          color: newAccGroupIds.includes(g.id) ? "#fff" : "var(--bch-text-soft)",
                         }}
                       >
                         <input
@@ -2370,7 +2575,7 @@ export default function App() {
                       onChange={(e) =>
                         handleAvatarPick(e, (dataUrl) => setNewAccAvatar(dataUrl))
                       }
-                      style={{ fontSize: 11, color: "#94a3b8" }}
+                      style={{ fontSize: 11, color: "var(--bch-muted)" }}
                     />
                     {newAccAvatar && (
                       <button
@@ -2391,7 +2596,7 @@ export default function App() {
                   alignItems: "center",
                   gap: 8,
                   fontSize: 12.5,
-                  color: "#cbd5e1",
+                  color: "var(--bch-text-soft)",
                   marginBottom: 14,
                 }}
               >
@@ -2427,8 +2632,8 @@ export default function App() {
           <div className="bch-modal-card" style={{ maxWidth: 520 }}>
             <div className="bch-modal-header">
               <div>
-                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Chỉnh sửa tài khoản</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                <h2 style={{ margin: 0, fontSize: 16, color: "var(--bch-text)" }}>Chỉnh sửa tài khoản</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "var(--bch-muted)" }}>
                   {getPlatform(editingAccount.platformId).name} • mã profile: {editingAccount.id}
                 </p>
               </div>
@@ -2491,7 +2696,7 @@ export default function App() {
                           type="file"
                           accept="image/*"
                           onChange={(e) => handleAvatarPick(e, (dataUrl) => setEditAvatar(dataUrl))}
-                          style={{ fontSize: 11, color: "#94a3b8" }}
+                          style={{ fontSize: 11, color: "var(--bch-muted)" }}
                         />
                         {editAvatar && (
                           <button
@@ -2638,7 +2843,7 @@ export default function App() {
                           border: "1px solid #334155",
                           cursor: "pointer",
                           background: editGroupIds.includes(g.id) ? g.color : "transparent",
-                          color: editGroupIds.includes(g.id) ? "#fff" : "#cbd5e1",
+                          color: editGroupIds.includes(g.id) ? "#fff" : "var(--bch-text-soft)",
                         }}
                       >
                         <input
@@ -2666,7 +2871,7 @@ export default function App() {
                   alignItems: "center",
                   gap: 8,
                   fontSize: 12.5,
-                  color: "#cbd5e1",
+                  color: "var(--bch-text-soft)",
                   marginBottom: 14,
                 }}
               >
@@ -2714,8 +2919,8 @@ export default function App() {
           <div className="bch-modal-card" style={{ maxWidth: 520 }}>
             <div className="bch-modal-header">
               <div>
-                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Thêm nền tảng / trang web</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                <h2 style={{ margin: 0, fontSize: 16, color: "var(--bch-text)" }}>Thêm nền tảng / trang web</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "var(--bch-muted)" }}>
                   Bất kỳ website nào cho phép đăng nhập trên trình duyệt.
                 </p>
               </div>
@@ -2783,7 +2988,7 @@ export default function App() {
                           justifyContent: "space-between",
                           gap: 8,
                           fontSize: 12,
-                          color: "#cbd5e1",
+                          color: "var(--bch-text-soft)",
                           padding: "4px 0",
                         }}
                       >
@@ -2825,6 +3030,119 @@ export default function App() {
         </div>
       )}
 
+      {showLan && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowLan(false);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 620 }}>
+            <div className="bch-modal-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16 }}>📡 Gửi file & máy khác</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "var(--bch-muted)" }}>
+                  Cùng mạng Wi-Fi/LAN • {lanPeers.length} thiết bị online
+                </p>
+              </div>
+              <button type="button" className="bch-toast-close" onClick={() => setShowLan(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="bch-lan-body">
+              <div className="bch-lan-row">
+                <input
+                  className="bch-input"
+                  value={lanDeviceName}
+                  onChange={(e) => setLanDeviceName(e.target.value)}
+                  placeholder="Tên thiết bị này"
+                />
+                <button type="button" className="bch-btn" onClick={() => void saveLanDeviceName()}>
+                  Lưu tên
+                </button>
+              </div>
+
+              <select
+                className="bch-select"
+                value={lanPeerId}
+                onChange={(e) => setLanPeerId(e.target.value)}
+              >
+                <option value="">— Chọn thiết bị nhận —</option>
+                {lanPeers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} • {p.ip}
+                  </option>
+                ))}
+              </select>
+
+              <div className="bch-lan-row">
+                <input
+                  className="bch-input"
+                  value={lanText}
+                  onChange={(e) => setLanText(e.target.value)}
+                  placeholder="Nhập tin nhắn cần gửi..."
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendLanText();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="bch-btn bch-btn-primary"
+                  disabled={lanSending || !lanText.trim() || !lanPeerId}
+                  onClick={() => void sendLanText()}
+                >
+                  Gửi
+                </button>
+              </div>
+
+              <label className="bch-lan-file">
+                📎 Gửi file (tối đa 80 MB)
+                <input
+                  type="file"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) sendLanFile(f);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
+
+              <div className="bch-lan-feed">
+                {lanFeed.length === 0 && (
+                  <div className="bch-inbox-empty">
+                    Chưa có dữ liệu. Chọn một thiết bị trong danh sách rồi gửi tin nhắn hoặc file.
+                  </div>
+                )}
+                {lanFeed.map((item) => (
+                  <div key={item.id} className={`bch-lan-item ${item.outgoing ? "out" : ""}`}>
+                    <div className="bch-lan-item-top">
+                      <strong>{item.from}</strong>
+                      {item.to ? <span className="bch-lan-to">→ {item.to}</span> : null}
+                      <span className="bch-lan-time">
+                        {new Date(item.at).toLocaleTimeString("vi-VN")}
+                      </span>
+                    </div>
+                    {item.text ? <div className="bch-lan-text">{item.text}</div> : null}
+                    {item.fileName ? (
+                      <div className="bch-lan-text">
+                        📄 {item.fileName}
+                        {item.size ? ` • ${(item.size / 1024).toFixed(0)} KB` : ""}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSettings && (
         <div
           className="bch-modal-overlay"
@@ -2836,8 +3154,8 @@ export default function App() {
           <div className="bch-modal-card" style={{ maxWidth: 560 }}>
             <div className="bch-modal-header">
               <div>
-                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Cài đặt</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                <h2 style={{ margin: 0, fontSize: 16, color: "var(--bch-text)" }}>Cài đặt</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "var(--bch-muted)" }}>
                   Henry Chat Pro v3.0.0 • {accounts.length} tài khoản • {platforms.length} nền tảng
                 </p>
               </div>
@@ -2849,6 +3167,29 @@ export default function App() {
             <div className="bch-section-card">
               <div className="bch-section-label" style={{ marginBottom: 9 }}>
                 Giao diện
+              </div>
+              <div className="bch-footer-row" style={{ gridTemplateColumns: "1fr 1fr 1fr", marginBottom: 10 }}>
+                <button
+                  type="button"
+                  className={`bch-btn ${settings.theme === "light" ? "bch-btn-primary" : ""}`}
+                  onClick={() => setSettings((prev) => ({ ...prev, theme: "light" }))}
+                >
+                  ☀️ Sáng
+                </button>
+                <button
+                  type="button"
+                  className={`bch-btn ${settings.theme === "dark" ? "bch-btn-primary" : ""}`}
+                  onClick={() => setSettings((prev) => ({ ...prev, theme: "dark" }))}
+                >
+                  🌙 Tối
+                </button>
+                <button
+                  type="button"
+                  className={`bch-btn ${settings.theme === "system" ? "bch-btn-primary" : ""}`}
+                  onClick={() => setSettings((prev) => ({ ...prev, theme: "system" }))}
+                >
+                  🖥 Hệ thống
+                </button>
               </div>
               <div className="bch-footer-row" style={{ gridTemplateColumns: "1fr 1fr" }}>
                 <button
@@ -2872,7 +3213,7 @@ export default function App() {
                   alignItems: "center",
                   gap: 8,
                   fontSize: 12.5,
-                  color: "#cbd5e1",
+                  color: "var(--bch-text-soft)",
                   marginTop: 12,
                 }}
               >
@@ -2891,7 +3232,7 @@ export default function App() {
                   alignItems: "center",
                   gap: 8,
                   fontSize: 12.5,
-                  color: "#cbd5e1",
+                  color: "var(--bch-text-soft)",
                   marginTop: 8,
                 }}
               >
@@ -2905,10 +3246,10 @@ export default function App() {
                 Thu xuống khay hệ thống khi bấm đóng (thoát thật qua menu khay)
               </label>
               <div style={{ marginTop: 12, borderTop: "1px solid #334155", paddingTop: 10 }}>
-                <div style={{ fontSize: 12.5, color: "#cbd5e1", marginBottom: 6, fontWeight: 600 }}>
+                <div style={{ fontSize: 12.5, color: "var(--bch-text-soft)", marginBottom: 6, fontWeight: 600 }}>
                   Riêng tư (chặn tín hiệu đã đọc / đang gõ)
                 </div>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#cbd5e1", marginTop: 4 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--bch-text-soft)", marginTop: 4 }}>
                   <input
                     type="checkbox"
                     checked={settings.privacyBlockReadReceipts}
@@ -2918,7 +3259,7 @@ export default function App() {
                   />
                   Không gửi "đã đọc" (read receipt)
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#cbd5e1", marginTop: 4 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--bch-text-soft)", marginTop: 4 }}>
                   <input
                     type="checkbox"
                     checked={settings.privacyBlockTyping}
@@ -2928,11 +3269,11 @@ export default function App() {
                   />
                   Không gửi "đang gõ" (typing indicator)
                 </label>
-                <p style={{ margin: "6px 0 0", fontSize: 11, color: "#94a3b8" }}>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--bch-muted)" }}>
                   Áp dụng cho mọi profile. Có thể không hiệu quả trên một số nền tảng (Telegram MTProto).
                 </p>
               </div>
-              <p style={{ margin: "10px 0 0", fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
+              <p style={{ margin: "10px 0 0", fontSize: 11, color: "var(--bch-muted)", lineHeight: 1.5 }}>
                 ⌨️ Phím tắt: <strong>Ctrl + 1…9</strong> mở tài khoản theo thứ tự đang hiển thị •{" "}
                 <strong>Ctrl + Tab</strong> / <strong>Ctrl + Shift + Tab</strong> chuyển kế tiếp hoặc
                 quay lại.
@@ -2949,7 +3290,7 @@ export default function App() {
                   alignItems: "center",
                   gap: 8,
                   fontSize: 12.5,
-                  color: "#cbd5e1",
+                  color: "var(--bch-text-soft)",
                 }}
               >
                 <input
@@ -2959,7 +3300,7 @@ export default function App() {
                 />
                 Tắt âm thanh thông báo của ứng dụng
               </label>
-              <p style={{ margin: "8px 0 10px", fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5 }}>
+              <p style={{ margin: "8px 0 10px", fontSize: 11.5, color: "var(--bch-muted)", lineHeight: 1.5 }}>
                 Mỗi tài khoản có công tắc thông báo riêng (nút 🔔 trên thẻ tài khoản). Ứng dụng chỉ đọc
                 số tin chưa đọc và cuộc gọi đến — không lưu nội dung tin nhắn.
               </p>
@@ -2972,7 +3313,7 @@ export default function App() {
               <div className="bch-section-label" style={{ marginBottom: 9 }}>
                 Hiệu năng &amp; dữ liệu
               </div>
-              <p style={{ margin: "0 0 10px", fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5 }}>
+              <p style={{ margin: "0 0 10px", fontSize: 11.5, color: "var(--bch-muted)", lineHeight: 1.5 }}>
                 Phiên đăng nhập của từng tài khoản nằm trong thư mục{" "}
                 <code>chat_profiles/&lt;nền tảng&gt;/&lt;mã tài khoản&gt;</code>.
               </p>
@@ -2995,7 +3336,7 @@ export default function App() {
                   <option value={5}>5</option>
                   <option value={0}>Không giới hạn (tốn RAM nhất)</option>
                 </select>
-                <p style={{ margin: "6px 0 0", fontSize: 11, color: "#94a3b8", lineHeight: 1.45 }}>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--bch-muted)", lineHeight: 1.45 }}>
                   Khi mở nhiều tài khoản hơn mức này, khung chat của tài khoản ít dùng nhất sẽ
                   tự đóng để giải phóng RAM. Phiên đăng nhập vẫn được giữ trên ổ đĩa nên mở
                   lại không phải đăng nhập lại; đổi lại, tài khoản đã đóng sẽ không báo tin
@@ -3054,8 +3395,8 @@ export default function App() {
           <div className="bch-modal-card" style={{ maxWidth: 520 }}>
             <div className="bch-modal-header">
               <div>
-                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Quản lý nhóm người dùng</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                <h2 style={{ margin: 0, fontSize: 16, color: "var(--bch-text)" }}>Quản lý nhóm người dùng</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "var(--bch-muted)" }}>
                   Tạo nhóm riêng để gom tài khoản theo ý bạn (không phụ thuộc trang web).
                 </p>
               </div>
@@ -3117,7 +3458,7 @@ export default function App() {
                     borderBottom: "1px solid #1e293b",
                   }}
                 >
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#cbd5e1", fontSize: 12.5 }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--bch-text-soft)", fontSize: 12.5 }}>
                     <span
                       style={{
                         width: 10,
@@ -3128,7 +3469,7 @@ export default function App() {
                       }}
                     />
                     {g.name}
-                    <span style={{ color: "#64748b", fontSize: 11 }}>
+                    <span style={{ color: "var(--bch-muted)", fontSize: 11 }}>
                       ({accounts.filter((a) => (a.groupIds || []).includes(g.id)).length} tài khoản)
                     </span>
                   </span>
@@ -3337,7 +3678,7 @@ export default function App() {
         >
           <div className="bch-modal-card" style={{ maxWidth: 460 }}>
             <div className="bch-modal-header">
-              <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Xóa tài khoản?</h2>
+              <h2 style={{ margin: 0, fontSize: 16, color: "var(--bch-text)" }}>Xóa tài khoản?</h2>
               <button type="button" className="bch-toast-close" onClick={() => setDeleteTarget(null)}>
                 ✕
               </button>
