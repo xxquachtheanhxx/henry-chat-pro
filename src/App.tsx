@@ -620,6 +620,7 @@ export default function App() {
     setShowAddPlatform(false);
     setShowGroupManager(false);
     setShowInbox(false);
+    setShowLan(false);
     setDeleteTarget(null);
   }, []);
 
@@ -3575,6 +3576,7 @@ export default function App() {
       {showInbox && (
         <div
           className="bch-inbox-overlay"
+          style={{ left: modalLeft }}
           onClick={(e) => {
             if (!IS_NOTIF_WINDOW && e.target === e.currentTarget) closeInboxPanel();
           }}
