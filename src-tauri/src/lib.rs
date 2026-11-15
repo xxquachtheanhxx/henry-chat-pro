@@ -48,6 +48,9 @@ pub struct ProfileAlertEvent {
     pub caller: String,
     #[serde(default)]
     pub call_kind: String,
+    /// Khoá hội thoại/nhóm (Telegram peer id hoặc tên chuẩn hoá).
+    #[serde(default)]
+    pub conversation: String,
     #[serde(default)]
     pub timestamp: u64,
 }
@@ -146,6 +149,7 @@ impl WorkspaceState {
                     body: String::new(),
                     caller: String::new(),
                     call_kind: String::new(),
+                    conversation: String::new(),
                     timestamp: 0,
                 });
             }
@@ -361,6 +365,8 @@ fn build_notify_call_monitor_script(platform: &str, profile_id: &str, notify_ena
             let lastCallKey = "";
             let lastNotifySentAt = 0;
             let seqCounter = 0;
+            const lastChatUnread = {};
+            let chatDigestInit = false;
 
             const bchTitleQueue = [];
             let bchTitleBusy = false;
@@ -454,6 +460,7 @@ fn build_notify_call_monitor_script(platform: &str, profile_id: &str, notify_ena
                         body: String(data.body || "").slice(0, 320),
                         caller: String(data.caller || "").slice(0, 140),
                         call_kind: String(data.call_kind || "").slice(0, 24),
+                        conversation: String(data.conversation || "").slice(0, 160),
                         timestamp: Date.now()
                     };
                     const jsonStr = origStringify(payload);
@@ -631,6 +638,44 @@ fn build_notify_call_monitor_script(platform: &str, profile_id: &str, notify_ena
                 return best;
             }
 
+            // Đọc danh sách hội thoại Telegram đang hiển thị: tên nhóm, tin nhắn mới nhất, số chưa đọc, trạng thái mute.
+            function readTelegramChatDigest() {
+                const out = [];
+                try {
+                    const items = document.querySelectorAll(
+                        '.chatlist .chatlist-chat, .chatlist .dialog, #folders-container .chatlist-chat, .ChatList .chatlist-chat, .ChatList .dialog'
+                    );
+                    for (let i = 0; i < items.length && i < 60; i++) {
+                        const el = items[i];
+                        const titleEl = el.querySelector('.peer-title, .dialog-title, .user-title, .chat-title');
+                        let name = titleEl ? String(titleEl.textContent || '').trim() : '';
+                        if (!name) {
+                            const al = el.getAttribute('aria-label') || '';
+                            name = al.split(',')[0].trim();
+                        }
+                        if (!name) continue;
+                        let key = el.getAttribute('data-peer-id') || el.getAttribute('data-chat-id') || '';
+                        if (!key) key = 'name:' + name.toLowerCase();
+                        const muted = el.classList.contains('is-muted')
+                            || !!el.querySelector('.dialog-muted-icon, .peer-muted, .chat-muted, [class*="muted-icon"]');
+                        let unread = 0;
+                        if (!muted) {
+                            const badgeEl = el.querySelector('.dialog-subtitle-badge, .unread, .Badge.unread');
+                            if (badgeEl && !badgeEl.classList.contains('is-muted') && !badgeEl.classList.contains('muted')) {
+                                const num = parseInt(String(badgeEl.textContent || '').replace(/\D+/g, ''), 10);
+                                unread = (isFinite(num) && num > 0) ? Math.min(num, 999) : 1;
+                            }
+                        }
+                        const prevEl = el.querySelector('.dialog-subtitle, .last-message, .chat-subtitle, .peer-subtitle');
+                        const preview = prevEl
+                            ? String(prevEl.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+                            : '';
+                        out.push({ key: key, name: name.slice(0, 120), preview: preview, unread: unread, muted: muted });
+                    }
+                } catch (e) {}
+                return out;
+            }
+
             function isVisibleEl(el) {
                 if (!el) return false;
                 return el.offsetParent !== null || el.getClientRects().length > 0;
@@ -693,11 +738,36 @@ fn build_notify_call_monitor_script(platform: &str, profile_id: &str, notify_ena
                         const increased = lastUnreadCount >= 0 && unread > lastUnreadCount;
                         lastUnreadCount = unread;
                         const justNotified = (Date.now() - lastNotifySentAt) < 2500;
-                        emitProfileEvent(increased && !justNotified ? "message" : "unread", {
-                            unread_count: unread,
-                            title: increased ? ("Có tin nhắn mới (" + unread + " chưa đọc)") : "",
-                            body: ""
-                        });
+                        if (PLAT_ID === 'telegram') {
+                            emitProfileEvent("unread", { unread_count: unread, title: "", body: "" });
+                        } else {
+                            emitProfileEvent(increased && !justNotified ? "message" : "unread", {
+                                unread_count: unread,
+                                title: increased ? ("Có tin nhắn mới (" + unread + " chưa đọc)") : "",
+                                body: ""
+                            });
+                        }
+                    }
+
+                    // Telegram: quét danh sách hội thoại mỗi vòng để phát thông báo theo từng nhóm/tin nhắn.
+                    if (PLAT_ID === 'telegram') {
+                        const digest = readTelegramChatDigest();
+                        for (let di = 0; di < digest.length; di++) {
+                            const chat = digest[di];
+                            const had = Object.prototype.hasOwnProperty.call(lastChatUnread, chat.key);
+                            const prevUnread = had ? lastChatUnread[chat.key] : 0;
+                            const isRecent = di < 5;
+                            if (chatDigestInit && !chat.muted && chat.unread > prevUnread && (had || isRecent)) {
+                                emitProfileEvent("message", {
+                                    unread_count: unread,
+                                    title: chat.name,
+                                    body: chat.preview,
+                                    conversation: chat.key
+                                });
+                            }
+                            lastChatUnread[chat.key] = chat.unread;
+                        }
+                        chatDigestInit = true;
                     }
 
                     const callInfo = detectIncomingCallInDom();

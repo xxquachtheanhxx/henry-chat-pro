@@ -82,6 +82,8 @@ export interface ProfileAlertEvent {
   body: string;
   caller: string;
   call_kind: string;
+  /** Khoá hội thoại/nhóm nếu nền tảng xác định được. */
+  conversation?: string;
   timestamp: number;
 }
 
@@ -103,6 +105,8 @@ export interface NotificationItem {
   isCall?: boolean;
   unread: number;
   at: number;
+  /** Khoá hội thoại/nhóm để gộp thông báo cùng một nhóm. */
+  conversation?: string;
 }
 
 export interface AlertToastItem {
@@ -938,8 +942,31 @@ export default function App() {
           isCall,
           unread: Math.max(0, evt.unread_count || 0),
           at: evt.timestamp || Date.now(),
+          conversation: evt.conversation || undefined,
         };
-        setNotifications((prev) => [entry, ...prev].slice(0, MAX_NOTIFICATIONS));
+        setNotifications((prev) => {
+          const conv = entry.conversation;
+          if (conv) {
+            const idx = prev.findIndex(
+              (n) =>
+                n.profileId === entry.profileId &&
+                n.conversation === conv &&
+                entry.at - n.at < 90000
+            );
+            if (idx >= 0) {
+              const next = prev.slice();
+              next[idx] = {
+                ...next[idx],
+                title: entry.title,
+                body: entry.body,
+                at: entry.at,
+                unread: Math.max(next[idx].unread, entry.unread),
+              };
+              return next.slice(0, MAX_NOTIFICATIONS);
+            }
+          }
+          return [entry, ...prev].slice(0, MAX_NOTIFICATIONS);
+        });
       }
     },
     [getPlatform, pushToast]
