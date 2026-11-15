@@ -8,7 +8,7 @@ html, body, #root {
   width: 100vw !important;
   height: 100vh !important;
   overflow: hidden !important;
-  background: #070b14 !important;
+  background: var(--bch-bg) !important;
   color: #f1f5f9 !important;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
   user-select: none;
@@ -20,10 +20,10 @@ html, body, #root {
   height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--bch-panel-2);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(71, 85, 105, 0.6);
+  background: var(--bch-border);
   border-radius: 99px;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -36,7 +36,7 @@ html, body, #root {
   display: flex;
   width: 100vw;
   height: 100vh;
-  background: radial-gradient(circle at top left, #131c31 0%, #070b14 70%);
+  background: radial-gradient(circle at top left, var(--bch-bg) 0%, var(--bch-bg) 70%);
 }
 
 /* LEFT SIDEBAR — 2 CLEAN MODES VIA HAMBURGER BUTTON: FULL (310px) & COLLAPSED ICON-ONLY (68px) */
@@ -45,8 +45,8 @@ html, body, #root {
   min-width: 310px;
   max-width: 310px;
   height: 100vh;
-  background: rgba(13, 19, 34, 0.97);
-  border-right: 1px solid rgba(51, 65, 85, 0.65);
+  background: var(--bch-sidebar);
+  border-right: 1px solid var(--bch-border);
   display: flex;
   flex-direction: column;
   z-index: 20;
@@ -59,7 +59,7 @@ html, body, #root {
   min-width: 68px;
   max-width: 68px;
   align-items: center;
-  background: #0b1120;
+  background: var(--bch-panel);
 }
 
 /* HAMBURGER (3 GẠCH) BUTTON */
@@ -67,9 +67,9 @@ html, body, #root {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  border: 1px solid rgba(71, 85, 105, 0.6);
-  background: rgba(30, 41, 59, 0.85);
-  color: #f8fafc;
+  border: 1px solid var(--bch-border);
+  background: var(--bch-hover);
+  color: var(--bch-text);
   cursor: pointer;
   display: inline-flex;
   flex-direction: column;
@@ -97,12 +97,12 @@ html, body, #root {
 .bch-collapsed-top {
   width: 100%;
   padding: 12px 0 10px 0;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+  border-bottom: 1px solid var(--bch-border);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  background: rgba(15, 23, 42, 0.75);
+  background: var(--bch-panel-2);
 }
 
 .bch-collapsed-add-btn {
@@ -162,7 +162,7 @@ html, body, #root {
   width: 44px;
   height: 44px;
   border-radius: 13px;
-  border: 2px solid rgba(71, 85, 105, 0.5);
+  border: 2px solid var(--bch-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -174,7 +174,7 @@ html, body, #root {
   padding: 0;
   transition: all 0.16s ease;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-  background: #1e293b;
+  background: var(--bch-hover);
 }
 .bch-collapsed-avatar-btn:hover {
   transform: translateY(-1px);
@@ -188,8 +188,8 @@ html, body, #root {
 .bch-collapsed-footer {
   width: 100%;
   padding: 10px 0;
-  border-top: 1px solid rgba(51, 65, 85, 0.55);
-  background: rgba(9, 13, 22, 0.95);
+  border-top: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -200,9 +200,9 @@ html, body, #root {
   width: 38px;
   height: 34px;
   border-radius: 9px;
-  border: 1px solid rgba(71, 85, 105, 0.55);
-  background: #1e293b;
-  color: #e2e8f0;
+  border: 1px solid var(--bch-border);
+  background: var(--bch-hover);
+  color: var(--bch-text);
   font-size: 14px;
   cursor: pointer;
   display: flex;
@@ -212,8 +212,8 @@ html, body, #root {
   transition: all 0.15s ease;
 }
 .bch-collapsed-tool-btn:hover {
-  background: #334155;
-  border-color: #64748b;
+  background: var(--bch-border);
+  border-color: var(--bch-muted);
 }
 .bch-collapsed-tool-btn.danger {
   background: rgba(225, 29, 72, 0.16);
@@ -227,12 +227,12 @@ html, body, #root {
 /* FULL MODE BRAND HEADER */
 .bch-brand-header {
   padding: 10px 10px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.55);
+  border-bottom: 1px solid var(--bch-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  background: rgba(15, 23, 42, 0.75);
+  background: var(--bch-panel-2);
 }
 
 .bch-brand-info {
@@ -304,7 +304,7 @@ html, body, #root {
 
 .bch-brand-sub {
   font-size: 10.5px;
-  color: #94a3b8;
+  color: var(--bch-muted);
   margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
@@ -314,8 +314,8 @@ html, body, #root {
 /* PLATFORM FILTER SECTION */
 .bch-plat-section {
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.45);
-  background: rgba(11, 15, 27, 0.5);
+  border-bottom: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
 }
 
 .bch-section-top {
@@ -330,7 +330,7 @@ html, body, #root {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #94a3b8;
+  color: var(--bch-muted);
 }
 
 .bch-link-btn {
@@ -360,9 +360,9 @@ html, body, #root {
   border-radius: 8px;
   font-size: 11px;
   font-weight: 600;
-  border: 1px solid rgba(51, 65, 85, 0.75);
-  background: #090d16;
-  color: #cbd5e1;
+  border: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
+  color: var(--bch-text-soft);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -370,7 +370,7 @@ html, body, #root {
   transition: all 0.15s ease;
 }
 .bch-chip:hover {
-  border-color: #64748b;
+  border-color: var(--bch-muted);
   color: #fff;
 }
 .bch-chip.active {
@@ -392,14 +392,14 @@ html, body, #root {
 
 .bch-acc-card {
   border-radius: 12px;
-  background: rgba(20, 29, 49, 0.85);
-  border: 1px solid rgba(51, 65, 85, 0.65);
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border);
   padding: 10px;
   transition: all 0.16s ease;
 }
 .bch-acc-card:hover {
   border-color: rgba(100, 116, 139, 0.85);
-  background: rgba(26, 37, 62, 0.9);
+  background: var(--bch-hover);
 }
 .bch-acc-card.dragging {
   opacity: 0.45;
@@ -416,7 +416,7 @@ html, body, #root {
   border-radius: 999px;
 }
 .bch-acc-card.active {
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.26) 0%, rgba(30, 41, 59, 0.95) 100%);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.26) 0%, var(--bch-hover) 100%);
   border-color: #3b82f6;
   box-shadow: 0 6px 20px rgba(37, 99, 235, 0.2);
 }
@@ -459,7 +459,7 @@ html, body, #root {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid #0f172a;
+  border: 2px solid var(--bch-panel-2);
   z-index: 2;
 }
 
@@ -471,7 +471,7 @@ html, body, #root {
 .bch-acc-name {
   font-size: 13px;
   font-weight: 700;
-  color: #f8fafc;
+  color: var(--bch-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -482,7 +482,7 @@ html, body, #root {
 
 .bch-acc-sub {
   font-size: 10.5px;
-  color: #94a3b8;
+  color: var(--bch-muted);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -497,7 +497,7 @@ html, body, #root {
   gap: 4px;
   margin-top: 8px;
   padding-top: 7px;
-  border-top: 1px solid rgba(51, 65, 85, 0.5);
+  border-top: 1px solid var(--bch-border);
 }
 
 .bch-action-btn {
@@ -505,9 +505,9 @@ html, body, #root {
   min-width: 0;
   padding: 4px 5px;
   border-radius: 6px;
-  border: 1px solid rgba(71, 85, 105, 0.55);
-  background: rgba(11, 17, 32, 0.85);
-  color: #cbd5e1;
+  border: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
+  color: var(--bch-text-soft);
   font-size: 10px;
   font-weight: 600;
   cursor: pointer;
@@ -518,9 +518,9 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 .bch-action-btn:hover {
-  background: #334155;
+  background: var(--bch-border);
   color: #ffffff;
-  border-color: #64748b;
+  border-color: var(--bch-muted);
 }
 .bch-action-btn.pinned {
   background: rgba(245, 158, 11, 0.22);
@@ -553,9 +553,9 @@ html, body, #root {
   bottom: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
-  background: #0f172a;
-  color: #f8fafc;
-  border: 1px solid #334155;
+  background: var(--bch-panel-2);
+  color: var(--bch-text);
+  border: 1px solid var(--bch-border);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 11px;
@@ -569,8 +569,8 @@ html, body, #root {
 /* SIDEBAR FOOTER */
 .bch-sidebar-footer {
   padding: 9px 10px 10px 10px;
-  border-top: 1px solid rgba(51, 65, 85, 0.6);
-  background: rgba(9, 13, 22, 0.95);
+  border-top: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -578,12 +578,12 @@ html, body, #root {
 
 .bch-status-banner {
   font-size: 10.5px;
-  color: #94a3b8;
+  color: var(--bch-muted);
   line-height: 1.35;
   padding: 4px 6px;
-  background: rgba(15, 23, 42, 0.7);
+  background: var(--bch-panel-2);
   border-radius: 7px;
-  border: 1px solid rgba(51, 65, 85, 0.4);
+  border: 1px solid var(--bch-border);
 }
 
 .bch-footer-row {
@@ -593,8 +593,8 @@ html, body, #root {
 }
 
 .bch-btn {
-  border: 1px solid rgba(71, 85, 105, 0.65);
-  background: #1e293b;
+  border: 1px solid var(--bch-border);
+  background: var(--bch-hover);
   color: #f1f5f9;
   padding: 7px 10px;
   border-radius: 8px;
@@ -608,8 +608,8 @@ html, body, #root {
   transition: all 0.15s ease;
 }
 .bch-btn:hover {
-  background: #334155;
-  border-color: #64748b;
+  background: var(--bch-border);
+  border-color: var(--bch-muted);
 }
 .bch-btn:disabled {
   opacity: 0.55;
@@ -641,7 +641,7 @@ html, body, #root {
 .bch-chat-viewport {
   flex: 1;
   height: 100vh;
-  background: #070b14;
+  background: var(--bch-bg);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -655,8 +655,8 @@ html, body, #root {
   text-align: center;
   padding: 28px 24px;
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(51, 65, 85, 0.6);
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
 }
 
@@ -667,7 +667,7 @@ html, body, #root {
   right: 0;
   bottom: 0;
   left: 310px;
-  background: rgba(7, 11, 20, 0.96);
+  background: var(--bch-panel);
   backdrop-filter: blur(10px);
   display: flex;
   align-items: center;
@@ -677,8 +677,8 @@ html, body, #root {
 }
 
 .bch-modal-card {
-  background: #0f172a;
-  border: 1px solid #334155;
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border);
   border-radius: 16px;
   width: 100%;
   max-width: 640px;
@@ -695,7 +695,7 @@ html, body, #root {
   gap: 12px;
   margin-bottom: 14px;
   padding-bottom: 11px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.55);
+  border-bottom: 1px solid var(--bch-border);
 }
 
 .bch-form-group {
@@ -706,17 +706,17 @@ html, body, #root {
   display: block;
   font-size: 12px;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--bch-text);
   margin-bottom: 6px;
 }
 
 .bch-input, .bch-select {
   width: 100%;
-  background: #090d16;
-  border: 1px solid #334155;
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border);
   border-radius: 9px;
   padding: 9px 12px;
-  color: #f8fafc;
+  color: var(--bch-text);
   font-size: 12.5px;
   outline: none;
   transition: border-color 0.15s;
@@ -727,8 +727,8 @@ html, body, #root {
 
 /* HELPER STYLES FOR SETTINGS & MIGRATION HUB */
 .bch-section-card {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(51, 65, 85, 0.6);
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border);
   border-radius: 12px;
   padding: 13px 15px;
   margin-bottom: 11px;
@@ -769,8 +769,8 @@ html, body, #root {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: #090d16;
-  border: 1px dashed #334155;
+  background: var(--bch-panel-2);
+  border: 1px dashed var(--bch-border);
 }
 
 .bch-avatar-preview {
@@ -822,8 +822,8 @@ html, body, #root {
 
 .bch-notify-panel {
   padding: 8px 10px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.55);
-  background: rgba(9, 14, 26, 0.9);
+  border-bottom: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -834,7 +834,7 @@ html, body, #root {
 .bch-call-banner {
   border-radius: 10px;
   padding: 8px 10px;
-  background: linear-gradient(135deg, rgba(6, 78, 59, 0.92) 0%, rgba(15, 23, 42, 0.96) 100%);
+  background: linear-gradient(135deg, rgba(6, 78, 59, 0.92) 0%, var(--bch-panel-2) 100%);
   border: 1px solid #10b981;
   display: flex;
   flex-direction: column;
@@ -863,7 +863,7 @@ html, body, #root {
   gap: 6px;
   padding: 7px 9px;
   border-radius: 9px;
-  background: rgba(30, 41, 59, 0.88);
+  background: var(--bch-hover);
   border: 1px solid rgba(59, 130, 246, 0.45);
   cursor: pointer;
   transition: all 0.14s ease;
@@ -886,7 +886,7 @@ html, body, #root {
 
 .bch-toast-body {
   font-size: 11px;
-  color: #e2e8f0;
+  color: var(--bch-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -895,7 +895,7 @@ html, body, #root {
 .bch-toast-close {
   background: none;
   border: none;
-  color: #94a3b8;
+  color: var(--bch-muted);
   font-size: 11px;
   cursor: pointer;
   padding: 1px 4px;
@@ -903,13 +903,13 @@ html, body, #root {
   flex-shrink: 0;
 }
 .bch-toast-close:hover {
-  background: rgba(71, 85, 105, 0.5);
+  background: var(--bch-border);
   color: #ffffff;
 }
 
 .bch-acc-card.incoming-call {
   border-color: #10b981 !important;
-  background: linear-gradient(135deg, rgba(6, 78, 59, 0.48) 0%, rgba(15, 23, 42, 0.95) 100%) !important;
+  background: linear-gradient(135deg, rgba(6, 78, 59, 0.48) 0%, var(--bch-panel-2) 100%) !important;
   animation: bchCallPulse 1.6s infinite;
 }
 
@@ -939,8 +939,8 @@ html, body, #root {
   margin-left: auto;
   padding: 1px 6px;
   border-radius: 999px;
-  background: rgba(71, 85, 105, 0.5);
-  color: #94a3b8;
+  background: var(--bch-border);
+  color: var(--bch-muted);
   font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
@@ -974,13 +974,13 @@ html, body, #root {
 }
 
 .bch-action-btn.notify-off {
-  background: rgba(71, 85, 105, 0.25);
+  background: var(--bch-border);
   border-color: rgba(100, 116, 139, 0.45);
-  color: #94a3b8;
+  color: var(--bch-muted);
 }
 .bch-action-btn.notify-off:hover {
   background: rgba(100, 116, 139, 0.4);
-  color: #f8fafc;
+  color: var(--bch-text);
 }
 
 .bch-collapsed-avatar-btn.incoming-call {
@@ -997,7 +997,7 @@ html, body, #root {
   padding: 0 4px;
   border-radius: 999px;
   background: #ef4444;
-  border: 2px solid #0b1120;
+  border: 2px solid var(--bch-panel);
   color: #ffffff;
   font-size: 9.5px;
   font-weight: 800;
@@ -1015,7 +1015,7 @@ html, body, #root {
   height: 19px;
   border-radius: 999px;
   background: #10b981;
-  border: 2px solid #0b1120;
+  border: 2px solid var(--bch-panel);
   color: #022c22;
   font-size: 10px;
   display: inline-flex;
@@ -1031,9 +1031,9 @@ html, body, #root {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  background: #334155;
-  border: 1.5px solid #0b1120;
-  color: #cbd5e1;
+  background: var(--bch-border);
+  border: 1.5px solid var(--bch-panel);
+  color: var(--bch-text-soft);
   font-size: 8.5px;
   display: inline-flex;
   align-items: center;
@@ -1049,9 +1049,9 @@ html, body, #root {
   height: 32px;
   padding: 0;
   border-radius: 10px;
-  border: 1px solid rgba(71, 85, 105, 0.6);
-  background: #1e293b;
-  color: #e2e8f0;
+  border: 1px solid var(--bch-border);
+  background: var(--bch-hover);
+  color: var(--bch-text);
   font-size: 14px;
   cursor: pointer;
   display: flex;
@@ -1060,8 +1060,8 @@ html, body, #root {
   transition: all 0.15s ease;
 }
 .bch-brand-bell-btn:hover {
-  background: #334155;
-  border-color: #64748b;
+  background: var(--bch-border);
+  border-color: var(--bch-muted);
 }
 .bch-brand-bell-count {
   position: absolute;
@@ -1093,11 +1093,11 @@ html, body, #root {
   width: 440px;
   max-width: 92vw;
   height: 100%;
-  background: #0b1220;
-  border-left: 1px solid rgba(51, 65, 85, 0.7);
+  background: var(--bch-panel);
+  border-left: 1px solid var(--bch-border);
   display: flex;
   flex-direction: column;
-  box-shadow: -12px 0 40px rgba(2, 6, 23, 0.6);
+  box-shadow: -12px 0 40px var(--bch-shadow);
 }
 
 .bch-inbox-head {
@@ -1106,19 +1106,19 @@ html, body, #root {
   justify-content: space-between;
   gap: 10px;
   padding: 14px 14px 12px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.6);
-  background: rgba(15, 23, 42, 0.9);
+  border-bottom: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
 }
 .bch-inbox-heading {
   margin: 0;
   font-size: 15px;
   font-weight: 800;
-  color: #f8fafc;
+  color: var(--bch-text);
 }
 .bch-inbox-sub {
   margin: 4px 0 0;
   font-size: 10.5px;
-  color: #94a3b8;
+  color: var(--bch-muted);
   line-height: 1.45;
   max-width: 250px;
 }
@@ -1135,14 +1135,14 @@ html, body, #root {
 .bch-inbox-empty {
   margin: 24px 8px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--bch-muted);
   line-height: 1.6;
   text-align: center;
 }
 
 .bch-inbox-item {
-  border: 1px solid rgba(51, 65, 85, 0.7);
-  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid var(--bch-border);
+  background: var(--bch-panel-2);
   border-radius: 11px;
   padding: 10px;
   display: flex;
@@ -1178,14 +1178,14 @@ html, body, #root {
 .bch-inbox-name {
   font-size: 12px;
   font-weight: 700;
-  color: #e2e8f0;
+  color: var(--bch-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .bch-inbox-time {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--bch-muted);
   margin-top: 1px;
 }
 .bch-inbox-title {
@@ -1197,7 +1197,7 @@ html, body, #root {
 }
 .bch-inbox-body {
   font-size: 11.5px;
-  color: #cbd5e1;
+  color: var(--bch-text-soft);
   line-height: 1.5;
   word-break: break-word;
   display: -webkit-box;
@@ -1234,8 +1234,8 @@ html, body, #root {
   padding: 4px;
   margin-bottom: 14px;
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(51, 65, 85, 0.6);
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border);
 }
 .bch-tab {
   flex: 1 1 0;
@@ -1243,15 +1243,15 @@ html, body, #root {
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #94a3b8;
+  color: var(--bch-muted);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 .bch-tab:hover {
-  color: #e2e8f0;
-  background: rgba(51, 65, 85, 0.5);
+  color: var(--bch-text);
+  background: var(--bch-border);
 }
 .bch-tab.is-active {
   background: #1d4ed8;
@@ -1270,7 +1270,7 @@ html, body, #root {
   align-items: center;
   gap: 8px;
   font-size: 12.5px;
-  color: #cbd5e1;
+  color: var(--bch-text-soft);
   cursor: pointer;
 }
 .bch-net-grid {
@@ -1294,9 +1294,9 @@ html, body, #root {
   border-radius: 8px;
   font-size: 11.5px;
   line-height: 1.5;
-  background: rgba(30, 41, 59, 0.75);
-  border: 1px solid rgba(51, 65, 85, 0.7);
-  color: #cbd5e1;
+  background: var(--bch-hover);
+  border: 1px solid var(--bch-border);
+  color: var(--bch-text-soft);
 }
 .bch-net-result.is-ok {
   border-color: rgba(16, 185, 129, 0.5);
@@ -1312,13 +1312,13 @@ html, body, #root {
   display: block;
   margin-top: 3px;
   font-size: 10.5px;
-  color: #94a3b8;
+  color: var(--bch-muted);
 }
 .bch-hint {
   margin: 0;
   font-size: 10.5px;
   line-height: 1.55;
-  color: #94a3b8;
+  color: var(--bch-muted);
 }
 
 /* ---------------- Cửa sổ trung tâm thông báo riêng (label "notif") ---------------- */
@@ -1329,11 +1329,11 @@ html, body, #root {
 }
 
 .bch-shell.bch-notif-window {
-  background: #0b1220;
+  background: var(--bch-panel);
 }
 
 .bch-shell.bch-notif-window .bch-inbox-overlay {
-  background: #0b1220;
+  background: var(--bch-panel);
   backdrop-filter: none;
 }
 
@@ -1356,7 +1356,7 @@ html, body, #root {
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
-  color: #94a3b8;
+  color: var(--bch-muted);
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
@@ -1604,4 +1604,345 @@ html[data-theme="light"] .bch-hamburger-line {
 html[data-theme="light"] .bch-shell.bch-notif-window,
 html[data-theme="light"] .bch-shell.bch-notif-window .bch-inbox-overlay {
   background: #f4f4f2;
+}
+
+/* ===================== BỐ CỤC & KIỂU CHỮ THEO ẢNH THAM CHIẾU ===================== */
+html,
+body,
+#root,
+button,
+input,
+select,
+textarea {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Inter,
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+body {
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  background: var(--bch-bg);
+  color: var(--bch-text);
+  -webkit-font-smoothing: antialiased;
+}
+.bch-shell h1,
+.bch-shell h2,
+.bch-shell h3 {
+  letter-spacing: -0.02em;
+}
+
+/* Thanh điều hướng dọc bên trái */
+.bch-rail {
+  width: 56px;
+  min-width: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0 12px;
+  background: var(--bch-panel);
+  border-right: 1px solid var(--bch-border-soft);
+  z-index: 30;
+}
+.bch-rail-brand {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: #141414;
+  flex: 0 0 auto;
+}
+.bch-rail-brand img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.bch-rail-group,
+.bch-rail-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bch-rail-bottom {
+  margin-top: auto;
+}
+.bch-rail-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--bch-text-soft);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.bch-rail-btn:hover {
+  background: var(--bch-hover);
+}
+.bch-rail-btn.active {
+  background: var(--bch-hover);
+  border-color: var(--bch-border-soft);
+  color: var(--bch-text);
+}
+.bch-rail-btn.danger:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+.bch-rail-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 99px;
+  background: #141414;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+html[data-theme="dark"] .bch-rail-badge {
+  background: #2563eb;
+}
+.bch-rail-dot {
+  position: absolute;
+  bottom: 5px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: #22c55e;
+}
+.bch-shell.bch-notif-window .bch-rail {
+  display: none;
+}
+
+/* Light: danh sách tài khoản phẳng như danh sách chat trong ảnh */
+html[data-theme="light"] .bch-sidebar {
+  width: 296px;
+  min-width: 296px;
+  max-width: 296px;
+}
+html[data-theme="light"] .bch-brand-header {
+  padding: 14px 14px 10px;
+}
+html[data-theme="light"] .bch-section-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 6px 10px 0;
+}
+html[data-theme="light"] .bch-section-label {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #8a8a86;
+  font-weight: 700;
+}
+html[data-theme="light"] .bch-chip {
+  background: #f1f0ee;
+  border-color: transparent;
+  color: #3f3f46;
+}
+html[data-theme="light"] .bch-chip:hover {
+  background: #e8e7e4;
+}
+html[data-theme="light"] .bch-chip.active {
+  background: #141414;
+  border-color: #141414;
+  color: #ffffff;
+}
+html[data-theme="light"] .bch-acc-card {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px;
+}
+html[data-theme="light"] .bch-acc-card:hover {
+  background: #f5f4f2;
+  border-color: transparent;
+}
+html[data-theme="light"] .bch-acc-card.active {
+  background: #2b2b28;
+  border-color: #2b2b28;
+  box-shadow: none;
+}
+html[data-theme="light"] .bch-acc-card.active .bch-acc-name,
+html[data-theme="light"] .bch-acc-card.active .bch-acc-alert-snippet {
+  color: #ffffff;
+}
+html[data-theme="light"] .bch-acc-card.active .bch-acc-sub {
+  color: rgba(255, 255, 255, 0.65);
+}
+html[data-theme="light"] .bch-acc-card.active .bch-action-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+html[data-theme="light"] .bch-acc-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+html[data-theme="light"] .bch-acc-sub {
+  font-size: 11.5px;
+  color: #8a8a86;
+}
+
+/* Light: vùng chat trắng, nền chấm mờ như ảnh */
+html[data-theme="light"] .bch-chat-viewport {
+  background-color: #ffffff;
+  background-image: radial-gradient(rgba(20, 20, 20, 0.1) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+html[data-theme="light"] .bch-stage-card {
+  background: #ffffff;
+  border: 1px solid rgba(20, 20, 20, 0.08);
+  box-shadow: 0 12px 32px rgba(20, 20, 20, 0.07);
+  border-radius: 16px;
+  padding: 28px 26px;
+}
+
+/* Tabs & modal */
+html[data-theme="light"] .bch-tabs {
+  background: #f1f0ee;
+  border-radius: 10px;
+  padding: 2px;
+}
+html[data-theme="light"] .bch-tab {
+  color: #6b7280;
+}
+html[data-theme="light"] .bch-tab.is-active {
+  background: #ffffff;
+  color: #141414;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .bch-modal-overlay {
+  background: rgba(20, 20, 20, 0.3);
+}
+html[data-theme="light"] .bch-modal-card {
+  border-radius: 16px;
+}
+
+/* Light: tinh chỉnh header, hàng tài khoản và nút thao tác gọn như ảnh */
+html[data-theme="light"] .bch-brand-logo {
+  display: none;
+}
+html[data-theme="light"] .bch-brand-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+html[data-theme="light"] .bch-brand-sub {
+  font-size: 11.5px;
+  color: #8a8a86;
+}
+html[data-theme="light"] .bch-acc-card {
+  border-bottom: 1px solid rgba(20, 20, 20, 0.06);
+}
+html[data-theme="light"] .bch-acc-actions.compact .bch-action-btn {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+  border-radius: 8px;
+  background: transparent;
+  border-color: transparent;
+}
+html[data-theme="light"] .bch-acc-actions.compact .bch-action-btn:hover {
+  background: #ececea;
+  border-color: rgba(20, 20, 20, 0.1);
+}
+html[data-theme="light"] .bch-acc-card.active .bch-acc-actions.compact .bch-action-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+html[data-theme="light"] .bch-sidebar-footer .bch-btn {
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: 9px;
+}
+
+/* Hành động chỉ hiện khi hover để danh sách sạch như ảnh */
+html[data-theme="light"] .bch-acc-actions.compact {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  margin-top: 0;
+  transition: max-height 0.16s ease, opacity 0.16s ease, margin-top 0.16s ease;
+}
+html[data-theme="light"] .bch-acc-card:hover .bch-acc-actions.compact,
+html[data-theme="light"] .bch-acc-card.active .bch-acc-actions.compact {
+  max-height: 40px;
+  opacity: 1;
+  margin-top: 6px;
+}
+html[data-theme="light"] .bch-sidebar-footer {
+  padding: 10px 12px 12px;
+  gap: 8px;
+  background: #ffffff;
+}
+html[data-theme="light"] .bch-status-banner {
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+/* Light: tiêu đề, chuông, nút thêm gọn theo ảnh */
+html[data-theme="light"] .bch-brand-name {
+  background: none;
+  -webkit-text-fill-color: #141414;
+  color: #141414;
+}
+html[data-theme="light"] .bch-brand-bell-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid rgba(20, 20, 20, 0.1);
+  box-shadow: none;
+  font-size: 14px;
+}
+html[data-theme="light"] .bch-brand-bell-btn:hover {
+  background: #f0f0ee;
+}
+html[data-theme="light"] .bch-brand-add-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #141414;
+  border-color: #141414;
+  color: #ffffff;
+  font-size: 17px;
+  box-shadow: none;
+}
+html[data-theme="light"] .bch-plat-section .bch-link-btn {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+html[data-theme="light"] .bch-footer-row .bch-btn {
+  background: transparent;
+  border-color: rgba(20, 20, 20, 0.1);
+  color: #3f3f46;
+  font-weight: 500;
+}
+html[data-theme="light"] .bch-footer-row .bch-btn:hover {
+  background: #f5f4f2;
+}
+
+html[data-theme="light"] .bch-chip:hover {
+  color: #141414;
+}
+html[data-theme="light"] .bch-link-btn {
+  color: #141414;
+  font-weight: 600;
+}
+html[data-theme="light"] .bch-link-btn:hover {
+  color: #000000;
 }

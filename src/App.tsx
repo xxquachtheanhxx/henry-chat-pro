@@ -1803,6 +1803,84 @@ export default function App() {
   /* -------------------------------- Render -------------------------------- */
   return (
     <div className={`bch-shell ${IS_NOTIF_WINDOW ? "bch-notif-window" : ""}`}>
+      <nav className="bch-rail" aria-label="Điều hướng chính">
+        <div className="bch-rail-brand" title="Henry Chat Pro">
+          <img src={logoUrl} alt="Henry Chat Pro" />
+        </div>
+        <div className="bch-rail-group">
+          <button
+            type="button"
+            className="bch-rail-btn active"
+            title="Tất cả tài khoản"
+            onClick={() => {
+              setSidebarFilter({ kind: "all" });
+              setSidebarMode("full");
+            }}
+          >
+            💬
+          </button>
+          <button
+            type="button"
+            className="bch-rail-btn"
+            title={`Trung tâm thông báo (${notifications.length})`}
+            onClick={openNotificationCenter}
+          >
+            🔔
+            {notifications.length > 0 && (
+              <span className="bch-rail-badge">
+                {notifications.length > 99 ? "99+" : notifications.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            className="bch-rail-btn"
+            title="Gửi file / máy khác (LAN)"
+            onClick={() => {
+              closeAllModals();
+              setShowLan(true);
+            }}
+          >
+            📡
+            {lanPeers.length > 0 && <span className="bch-rail-dot" />}
+          </button>
+        </div>
+        <div className="bch-rail-bottom">
+          <button
+            type="button"
+            className="bch-rail-btn"
+            title={`Giao diện: ${settings.theme === "light" ? "Sáng" : settings.theme === "dark" ? "Tối" : "Theo hệ thống"}`}
+            onClick={() =>
+              setSettings((prev) => ({
+                ...prev,
+                theme:
+                  prev.theme === "light" ? "dark" : prev.theme === "dark" ? "system" : "light",
+              }))
+            }
+          >
+            {settings.theme === "light" ? "☀️" : settings.theme === "dark" ? "🌙" : "🖥"}
+          </button>
+          <button
+            type="button"
+            className="bch-rail-btn"
+            title="Cài đặt"
+            onClick={() => {
+              closeAllModals();
+              setShowSettings(true);
+            }}
+          >
+            ⚙️
+          </button>
+          <button
+            type="button"
+            className="bch-rail-btn danger"
+            title="Thoát ứng dụng"
+            onClick={exitApp}
+          >
+            ⏻
+          </button>
+        </div>
+      </nav>
       <aside className={`bch-sidebar ${sidebarMode === "collapsed" ? "mode-collapsed" : ""}`}>
         {sidebarMode === "collapsed" ? (
           <>
@@ -2004,7 +2082,7 @@ export default function App() {
                 <img src={logoUrl} alt="Henry Chat Pro" className="bch-brand-logo" />
                 <div className="bch-brand-text">
                   <h1 className="bch-brand-title">
-                    <span className="bch-brand-name">Henry Chat Pro</span>
+                    <span className="bch-brand-name">Tài khoản</span>
                     {totalUnread > 0 && (
                       <span
                         className="bch-total-unread-pill"
@@ -2376,18 +2454,6 @@ export default function App() {
 
             <div className="bch-sidebar-footer">
               <div className="bch-status-banner">{statusMessage}</div>
-              <button
-                type="button"
-                className="bch-btn"
-                style={{ width: "100%", marginBottom: 8 }}
-                onClick={() => {
-                  closeAllModals();
-                  setShowLan(true);
-                }}
-              >
-                📡 Gửi file & máy khác
-                {lanPeers.length > 0 ? ` • ${lanPeers.length} online` : ""}
-              </button>
               <div className="bch-footer-row">
                 <button
                   type="button"
@@ -2404,15 +2470,12 @@ export default function App() {
                   className="bch-btn"
                   onClick={() => {
                     closeAllModals();
-                    setShowSettings(true);
+                    setShowLan(true);
                   }}
                 >
-                  ⚙ Cài đặt
+                  📡 Gửi file
                 </button>
               </div>
-              <button type="button" className="bch-btn bch-btn-danger" onClick={exitApp}>
-                ⏻ Thoát ứng dụng
-              </button>
             </div>
           </>
         )}
@@ -2440,7 +2503,7 @@ export default function App() {
             </button>
           </div>
         ) : (
-          <div style={{ fontSize: 11.5, color: "var(--bch-border)", textAlign: "center" }}>
+          <div style={{ fontSize: 11.5, color: "var(--bch-muted)", textAlign: "center" }}>
             Khung chat của “{selectedAccount.name}” đang chạy trong cửa sổ WebView2 phía trên.
             <br />
             {TAURI_READY
