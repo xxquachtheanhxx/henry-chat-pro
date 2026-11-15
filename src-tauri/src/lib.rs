@@ -2644,6 +2644,17 @@ pub fn run() {
             let state_for_tray = Arc::clone(&state_for_setup);
             let app_for_tray = app.handle().clone();
             let tray = tray_builder
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let _ = show_notification_window(tray.app_handle());
+                    }
+                })
                 .on_menu_event(move |app, event| {
                     let id = event.id.as_ref();
                     match id {

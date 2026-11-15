@@ -3249,6 +3249,17 @@ export default function App() {
                       >
                         Mở
                       </button>
+                      <button
+                        type="button"
+                        className="bch-inbox-del"
+                        onClick={() =>
+                          setNotifications((prev) => prev.filter((n) => n.id !== item.id))
+                        }
+                        title="Xoá thông báo này"
+                        aria-label="Xoá thông báo này"
+                      >
+                        ✕
+                      </button>
                     </div>
 
                     <div className="bch-inbox-title">{item.title}</div>
