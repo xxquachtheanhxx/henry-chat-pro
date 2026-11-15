@@ -1728,9 +1728,9 @@ html[data-theme="dark"] .bch-rail-badge {
 
 /* Light: danh sách tài khoản phẳng như danh sách chat trong ảnh */
 html[data-theme="light"] .bch-sidebar {
-  width: 296px;
-  min-width: 296px;
-  max-width: 296px;
+  width: 310px;
+  min-width: 310px;
+  max-width: 310px;
 }
 html[data-theme="light"] .bch-brand-header {
   padding: 14px 14px 10px;
@@ -1945,4 +1945,9 @@ html[data-theme="light"] .bch-link-btn {
 }
 html[data-theme="light"] .bch-link-btn:hover {
   color: #000000;
+}
+
+/* Nền tối mặc định đặt color !important ở body -> phải ghi đè cho theme sáng */
+html[data-theme="light"] body {
+  color: #141414 !important;
 }

@@ -1821,7 +1821,7 @@ async fn switch_active_chat_account(
             .unwrap_or_default();
         // Bật cờ tắt tracking prevention của WebView2: Messenger/Facebook và một số site
         // otherwise chặn cookie third-party, khiến phiên đăng nhập không được lưu.
-        let mut extra_args = String::from("--disable-features=msTrackingPrevention --disable-blink-features=AutomationControlled");
+        let mut extra_args = String::from("--disable-features=msTrackingPrevention,ThirdPartyStoragePartitioning,BlockThirdPartyCookies --disable-blink-features=AutomationControlled");
         match net::build_proxy_args(&profile_web.proxy) {
             Ok(Some(proxy_args)) => {
                 extra_args.push(' ');
@@ -2408,7 +2408,13 @@ async fn confirm_and_exit_app(
             let _ = win.close();
         }
     }
-    app.exit(0);
+    // Chờ WebView2 ghi cookie/localStorage xuống đĩa rồi mới thoát.
+    // Thoát ngay lập tức có thể làm mất phiên đăng nhập (đặc biệt Messenger).
+    let app_for_exit = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1200));
+        app_for_exit.exit(0);
+    });
     Ok(())
 }
 
@@ -2676,7 +2682,16 @@ pub fn run() {
                             if let Some(main) = app.get_webview_window("main") {
                                 let _ = main.hide();
                             }
-                            app.exit(0);
+                            for (label, win) in app.webview_windows() {
+                                if label != "main" {
+                                    let _ = win.close();
+                                }
+                            }
+                            let app_for_exit = app.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_millis(1200));
+                                app_for_exit.exit(0);
+                            });
                         }
                         other if other.starts_with("profile:") => {
                             let pid = other.trim_start_matches("profile:");

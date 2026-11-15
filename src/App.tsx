@@ -158,6 +158,8 @@ export interface LanFeedItem {
 
 export type SidebarMode = "full" | "collapsed";
 
+const RAIL_WIDTH = 56;
+
 const SIDEBAR_WIDTH_MAP: Record<SidebarMode, number> = {
   full: 310,
   collapsed: 68,
@@ -640,7 +642,9 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(LS_SIDEBAR, sidebarMode);
-    void callTauri("set_sidebar_width", { width: SIDEBAR_WIDTH_MAP[sidebarMode] });
+    void callTauri("set_sidebar_width", {
+      width: RAIL_WIDTH + SIDEBAR_WIDTH_MAP[sidebarMode],
+    });
   }, [sidebarMode]);
 
   useEffect(() => {
