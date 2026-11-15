@@ -401,6 +401,20 @@ html, body, #root {
   border-color: rgba(100, 116, 139, 0.85);
   background: rgba(26, 37, 62, 0.9);
 }
+.bch-acc-card.dragging {
+  opacity: 0.45;
+}
+.bch-acc-card.drag-over {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35);
+}
+.bch-collapsed-profile-item.dragging {
+  opacity: 0.45;
+}
+.bch-collapsed-profile-item.drag-over {
+  box-shadow: 0 0 0 2px #38bdf8;
+  border-radius: 999px;
+}
 .bch-acc-card.active {
   background: linear-gradient(135deg, rgba(37, 99, 235, 0.26) 0%, rgba(30, 41, 59, 0.95) 100%);
   border-color: #3b82f6;

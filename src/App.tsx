@@ -53,6 +53,8 @@ export interface AccountProfile {
   id: string;
   name: string;
   platformId: string;
+  /** Thứ tự hiển thị (kéo thả để thay đổi). */
+  order?: number;
   customUrl?: string;
   avatarDataUrl?: string;
   pinned?: boolean;
@@ -410,8 +412,12 @@ export default function App() {
     // danh sách rỗng (không ghi đè) để bước khôi phục từ đĩa dựng lại tài khoản.
     if (!localStorage.getItem(LS_ACCOUNTS)) return DEFAULT_ACCOUNTS;
     const saved = loadJson<AccountProfile[] | null>(LS_ACCOUNTS, null);
-    return Array.isArray(saved) ? saved : [];
+    if (!Array.isArray(saved)) return [];
+    return saved.map((a, i) => ({ ...a, order: typeof a.order === "number" ? a.order : i * 10 }));
   });
+
+  const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null);
+  const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null);
 
   const [groups, setGroups] = useState<UserGroup[]>(() => {
     const saved = loadJson<UserGroup[] | null>(LS_GROUPS, null);
@@ -749,6 +755,9 @@ export default function App() {
     }
     return [...list].sort((a, b) => {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+      const oa = typeof a.order === "number" ? a.order : a.createdAt;
+      const ob = typeof b.order === "number" ? b.order : b.createdAt;
+      if (oa !== ob) return oa - ob;
       return a.createdAt - b.createdAt;
     });
   }, [accounts, sidebarFilter]);
@@ -1232,6 +1241,26 @@ export default function App() {
     );
   };
 
+  const reorderProfiles = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const list = filteredAccounts;
+    const fromIndex = list.findIndex((a) => a.id === fromId);
+    const toIndex = list.findIndex((a) => a.id === toId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const reordered = [...list];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+    // Reassign order values
+    const orderMap = new Map<string, number>();
+    reordered.forEach((a, i) => orderMap.set(a.id, i * 10));
+    setAccounts((prev) =>
+      prev.map((a) => {
+        const o = orderMap.get(a.id);
+        return o !== undefined ? { ...a, order: o } : a;
+      })
+    );
+  };
+
   const toggleNotifications = (acc: AccountProfile) => {
     const enabled = acc.notificationsEnabled === false;
     setAccounts((prev) =>
@@ -1598,7 +1627,32 @@ export default function App() {
                 return (
                   <div
                     key={acc.id}
-                    className="bch-collapsed-profile-item"
+                    className={`bch-collapsed-profile-item ${
+                      draggedProfileId === acc.id ? "dragging" : ""
+                    } ${dragOverProfileId === acc.id ? "drag-over" : ""}`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedProfileId(acc.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (draggedProfileId && draggedProfileId !== acc.id) {
+                        setDragOverProfileId(acc.id);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (draggedProfileId && draggedProfileId !== acc.id) {
+                        reorderProfiles(draggedProfileId, acc.id);
+                      }
+                      setDraggedProfileId(null);
+                      setDragOverProfileId(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedProfileId(null);
+                      setDragOverProfileId(null);
+                    }}
                     title={`${acc.name} (${plat.name})${
                       hasCall ? `\n📞 Đang có cuộc gọi đến: ${alertState?.caller || ""}` : ""
                     }${unreadCnt > 0 ? `\n🔔 ${unreadCnt} tin chưa đọc` : ""}\nChuột trái: mở • Chuột phải: sửa`}
@@ -1915,8 +1969,33 @@ export default function App() {
                   <div
                     className={`bch-acc-card ${isSelected ? "active" : ""} ${
                       hasCall ? "incoming-call" : ""
+                    } ${draggedProfileId === acc.id ? "dragging" : ""} ${
+                      dragOverProfileId === acc.id ? "drag-over" : ""
                     }`}
                     key={acc.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedProfileId(acc.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (draggedProfileId && draggedProfileId !== acc.id) {
+                        setDragOverProfileId(acc.id);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (draggedProfileId && draggedProfileId !== acc.id) {
+                        reorderProfiles(draggedProfileId, acc.id);
+                      }
+                      setDraggedProfileId(null);
+                      setDragOverProfileId(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedProfileId(null);
+                      setDragOverProfileId(null);
+                    }}
                   >
                     <div
                       className="bch-acc-header"
