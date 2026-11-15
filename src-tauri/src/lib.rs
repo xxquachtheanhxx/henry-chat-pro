@@ -727,8 +727,8 @@ fn build_telegram_injection_script() -> String {
 
             // 1. Dọn dẹp CacheStorage / ServiceWorker bị kẹt 1 lần mỗi phiên (Không chạm vào localStorage nên giữ nguyên đăng nhập 100%)
             try {
-                if (!sessionStorage.getItem('__bch_tg_cache_healed_v3__')) {
-                    sessionStorage.setItem('__bch_tg_cache_healed_v3__', '1');
+                                    if (!sessionStorage.getItem('__bch_tg_cache_healed_v4__')) {
+                    sessionStorage.setItem('__bch_tg_cache_healed_v4__', '1');
                     if (window.caches && typeof window.caches.keys === 'function') {
                         window.caches.keys().then(function(names) {
                             names.forEach(function(name) {
@@ -1261,20 +1261,20 @@ fn build_injection_script(platform: &str, profile_id: &str, notify_enabled: bool
 
 /// Telegram Web K giữ cache ảnh cũ trong EBWebView -> xóa 1 lần cho mỗi profile để media hiển thị lại.
 fn repair_telegram_profile_media_cache(profile_dir: &Path) {
-    let marker = profile_dir.join(".bch_telegram_media_fix_v3");
+    let marker = profile_dir.join(".bch_telegram_media_fix_v4");
     if marker.exists() {
         return;
     }
     let default_dir = profile_dir.join("EBWebView").join("Default");
     if default_dir.exists() {
-        for folder in ["Service Worker", "Cache", "Code Cache", "IndexedDB"] {
+        for folder in ["Cache", "Code Cache"] {
             let target = default_dir.join(folder);
             if target.exists() {
                 let _ = fs::remove_dir_all(&target);
             }
         }
     }
-    let _ = fs::write(marker, "healed_v3");
+    let _ = fs::write(marker, "healed_v4");
 }
 
 pub(crate) fn current_epoch_ms() -> u64 {
@@ -1704,19 +1704,24 @@ async fn switch_active_chat_account(
             .as_deref()
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_default();
+        // Bật cờ tắt tracking prevention của WebView2: Messenger/Facebook và một số site
+        // otherwise chặn cookie third-party, khiến phiên đăng nhập không được lưu.
+        let mut extra_args = String::from("--disable-features=msTrackingPrevention");
         match net::build_proxy_args(&profile_web.proxy) {
-            Ok(Some(extra_args)) => {
-                #[cfg(target_os = "windows")]
-                {
-                    builder = builder.additional_browser_args(&extra_args);
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = extra_args;
-                }
+            Ok(Some(proxy_args)) => {
+                extra_args.push(' ');
+                extra_args.push_str(&proxy_args);
             }
             Ok(None) => {}
             Err(err) => return Err(format!("Cấu hình proxy không hợp lệ: {err}")),
+        }
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.additional_browser_args(&extra_args);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = extra_args;
         }
 
         if let Some(main_win) = app.get_webview_window("main") {
