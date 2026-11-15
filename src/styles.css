@@ -2187,3 +2187,69 @@ html[data-theme] .bch-status-banner {
     transition: none;
   }
 }
+
+/* ===================== CHỐNG TRÀN/CẮT KHI CỬA SỔ HẸP ===================== */
+.bch-sidebar {
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.bch-brand-header {
+  min-width: 0;
+  overflow: hidden;
+}
+.bch-brand-info {
+  min-width: 0;
+  overflow: hidden;
+}
+.bch-brand-text {
+  min-width: 0;
+  overflow: hidden;
+}
+.bch-brand-title,
+.bch-brand-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bch-brand-bell-btn,
+.bch-brand-add-btn,
+.bch-hamburger-btn {
+  flex: 0 0 auto;
+}
+.bch-section-top {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 8px;
+}
+.bch-section-top .bch-link-btn {
+  white-space: nowrap;
+  margin-left: auto;
+}
+.bch-plat-chips,
+.bch-group-chips {
+  max-width: 100%;
+}
+.bch-chip {
+  max-width: 100%;
+  min-width: 0;
+}
+.bch-chip .bch-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bch-acc-avatar,
+.bch-avatar-preview {
+  overflow: hidden;
+  font-size: 11px;
+  letter-spacing: -0.5px;
+}
+.bch-acc-meta {
+  min-width: 0;
+}
+.bch-acc-name,
+.bch-acc-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

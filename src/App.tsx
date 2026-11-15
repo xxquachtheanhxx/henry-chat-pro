@@ -1779,7 +1779,8 @@ export default function App() {
     };
     // Ưu tiên icon nền tảng (badge) kèm chữ cái đầu của tên profile để vừa nhận biết
     // platform vừa phân biệt được các profile khi thu gọn.
-    const fallback = `${plat.badge}${profileInitials(acc.name).charAt(0)}`;
+    const badge = plat.badge.slice(0, 2);
+    const fallback = `${badge}${profileInitials(acc.name).charAt(0)}`;
     if (size === "preview") {
       return (
         <div className="bch-avatar-preview" style={style}>
@@ -2009,7 +2010,7 @@ export default function App() {
                       {acc.avatarDataUrl ? (
                         <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
                       ) : (
-                        `${plat.badge}${profileInitials(acc.name).charAt(0)}`
+                        `${plat.badge.slice(0, 2)}${profileInitials(acc.name).charAt(0)}`
                       )}
                       {hasCall ? (
                         <span className="bch-collapsed-call-badge" title="Cuộc gọi đến">
