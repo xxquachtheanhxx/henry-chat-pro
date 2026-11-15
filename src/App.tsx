@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import logoUrl from "./assets/logo.png";
 
 /* ============================================================================
@@ -242,6 +243,15 @@ const DEFAULT_ACCOUNTS: AccountProfile[] = [
 
 const TAURI_READY = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+/** Cửa sổ "notif" chỉ vẽ trung tâm thông báo, không vẽ giao diện chính. */
+const IS_NOTIF_WINDOW = (() => {
+  try {
+    return getCurrentWindow().label === "notif";
+  } catch {
+    return false;
+  }
+})();
+
 /** Gọi lệnh Tauri an toàn: khi mở bằng trình duyệt thường (vite preview) sẽ bỏ qua thay vì crash. */
 async function callTauri<T>(
   cmd: string,
@@ -473,7 +483,7 @@ export default function App() {
   const [alertToasts, setAlertToasts] = useState<AlertToastItem[]>([]);
 
   /* ------------------------ Trung tâm thông báo ------------------------- */
-  const [showInbox, setShowInbox] = useState(false);
+  const [showInbox, setShowInbox] = useState(IS_NOTIF_WINDOW);
   const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
     loadJson<NotificationItem[]>(LS_NOTIF, [])
   );
@@ -563,6 +573,18 @@ export default function App() {
     showInbox ||
     deleteTarget !== null;
 
+  const closeInboxPanel = useCallback(() => {
+    if (IS_NOTIF_WINDOW) {
+      try {
+        void getCurrentWindow().hide();
+      } catch {
+        /* bỏ qua */
+      }
+      return;
+    }
+    setShowInbox(false);
+  }, []);
+
   const closeAllModals = useCallback(() => {
     setShowSettings(false);
     setShowAddAccount(false);
@@ -629,7 +651,7 @@ export default function App() {
   // Cửa sổ chính được tạo ở trạng thái ẩn: hiện nó sau khi React đã vẽ xong khung chat
   // (tránh khung trắng của WebView2 khi khởi động).
   useEffect(() => {
-    if (!TAURI_READY) return;
+    if (!TAURI_READY || IS_NOTIF_WINDOW) return;
     void callTauri("show_main_window");
   }, []);
 
@@ -1013,6 +1035,11 @@ export default function App() {
   /* ------------------------------- Keyboard ------------------------------- */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && IS_NOTIF_WINDOW) {
+        e.preventDefault();
+        closeInboxPanel();
+        return;
+      }
       if (e.key === "Escape" && anyModalOpen) {
         e.preventDefault();
         closeAllModals();
@@ -1020,7 +1047,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [anyModalOpen, closeAllModals]);
+  }, [anyModalOpen, closeAllModals, closeInboxPanel]);
 
   /* ------------------------------- Actions -------------------------------- */
   const selectAccount = useCallback(
@@ -1570,7 +1597,7 @@ export default function App() {
 
   /* -------------------------------- Render -------------------------------- */
   return (
-    <div className="bch-shell">
+    <div className={`bch-shell ${IS_NOTIF_WINDOW ? "bch-notif-window" : ""}`}>
       <aside className={`bch-sidebar ${sidebarMode === "collapsed" ? "mode-collapsed" : ""}`}>
         {sidebarMode === "collapsed" ? (
           <>
@@ -3115,11 +3142,11 @@ export default function App() {
         <div
           className="bch-inbox-overlay"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setShowInbox(false);
+            if (!IS_NOTIF_WINDOW && e.target === e.currentTarget) closeInboxPanel();
           }}
         >
           <div className="bch-inbox-card">
-            <div className="bch-inbox-head">
+            <div className="bch-inbox-head" data-tauri-drag-region>
               <div>
                 <h2 className="bch-inbox-heading">Trung tâm thông báo</h2>
                 <p className="bch-inbox-sub">
@@ -3141,8 +3168,9 @@ export default function App() {
                 <button
                   type="button"
                   className="bch-toast-close"
-                  onClick={() => setShowInbox(false)}
+                  onClick={closeInboxPanel}
                   aria-label="Đóng"
+                  title={IS_NOTIF_WINDOW ? "Ẩn bảng thông báo" : "Đóng"}
                 >
                   ✕
                 </button>
@@ -3187,7 +3215,13 @@ export default function App() {
                         type="button"
                         className="bch-link-btn"
                         onClick={() => {
-                          if (acc) selectAccount(acc);
+                          if (IS_NOTIF_WINDOW) {
+                            void callTauri("open_profile_from_notification", {
+                              profileId: item.profileId,
+                            });
+                          } else if (acc) {
+                            selectAccount(acc);
+                          }
                         }}
                       >
                         Mở

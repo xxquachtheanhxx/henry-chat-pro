@@ -2485,6 +2485,63 @@ fn show_tray_balloon(app: &AppHandle, title: &str, msg: &str) {
     }
 }
 
+/// Mở (hoặc tái sử dụng) cửa sổ nhỏ chỉ hiển thị trung tâm thông báo.
+fn show_notification_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("notif") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    let width = 430.0_f64;
+    let height = 620.0_f64;
+    let mut builder = WebviewWindowBuilder::new(app, "notif", WebviewUrl::App("index.html".into()))
+        .title("Trung tâm thông báo")
+        .inner_size(width, height)
+        .min_inner_size(360.0, 420.0)
+        .resizable(true)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(true)
+        .visible(false);
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(Some(mon)) = app.primary_monitor() {
+            let sf = mon.scale_factor();
+            let msize = mon.size();
+            let mpos = mon.position();
+            let w = (width * sf).round() as i32;
+            let h = (height * sf).round() as i32;
+            let x = mpos.x + msize.width as i32 - w - 12;
+            let y = mpos.y + msize.height as i32 - h - 72;
+            builder = builder.position(x as f64 / sf, y as f64 / sf);
+        }
+    }
+    let win = builder.build().map_err(|e| e.to_string())?;
+    let _ = win.show();
+    let _ = win.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_notification_window(app: AppHandle) -> Result<(), String> {
+    show_notification_window(&app)
+}
+
+/// Từ cửa sổ thông báo: mở cửa sổ chính và chọn đúng profile.
+#[tauri::command]
+async fn open_profile_from_notification(app: AppHandle, profile_id: String) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    let _ = app.emit_to("main", "bch-tray-select-profile", profile_id);
+    if let Some(n) = app.get_webview_window("notif") {
+        let _ = n.hide();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let workspace = Arc::new(WorkspaceState::new());
@@ -2519,11 +2576,7 @@ pub fn run() {
                             }
                         }
                         "notifications" => {
-                            let _ = app.emit_to("main", "bch-open-notification-center", ());
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                            let _ = show_notification_window(app);
                         }
                         "quit" => {
                             if let Some(main) = app.get_webview_window("main") {
@@ -2646,6 +2699,8 @@ pub fn run() {
             update_tray_profiles,
             hide_to_tray,
             set_privacy_mode,
+            open_notification_window,
+            open_profile_from_notification,
             save_workspace_snapshot,
             load_workspace_snapshot,
             open_system_browser,
