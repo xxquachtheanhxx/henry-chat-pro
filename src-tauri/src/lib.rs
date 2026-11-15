@@ -1258,7 +1258,11 @@ fn build_telegram_injection_script() -> String {
 fn build_injection_script(platform: &str, profile_id: &str, notify_enabled: bool) -> String {
     let notify_script = build_notify_call_monitor_script(platform, profile_id, notify_enabled);
     if platform == "telegram" {
-        return format!("{}\n{}", notify_script, build_telegram_injection_script());
+        // Tạm tắt script media viewer (có thể gây lỗi gửi tin vào nhóm). Bật lại sau khi xác nhận.
+        let telegram_media_fix_enabled: bool = false;
+        if telegram_media_fix_enabled {
+            return format!("{}\n{}", notify_script, build_telegram_injection_script());
+        }
     }
     notify_script
 }
@@ -1686,6 +1690,16 @@ async fn switch_active_chat_account(
                     }
                 })
                 .on_new_window(|new_url, _features| {
+                    let host = new_url.host_str().unwrap_or("").to_ascii_lowercase();
+                    let is_auth_host = host.contains("facebook.com")
+                        || host.contains("messenger.com")
+                        || host.contains("accounts.google.com")
+                        || host.contains("login.microsoftonline.com");
+                    // Với luồng đăng nhập Messenger/Facebook, không mở trình duyệt ngoài (làm đứt phiên).
+                    // Để site tự xử lý trong cùng WebView (redirect/popup nội bộ).
+                    if is_auth_host {
+                        return tauri::webview::NewWindowResponse::Deny;
+                    }
                     if new_url.scheme() == "http" || new_url.scheme() == "https" {
                         #[cfg(target_os = "windows")]
                         {
@@ -1710,7 +1724,7 @@ async fn switch_active_chat_account(
             .unwrap_or_default();
         // Bật cờ tắt tracking prevention của WebView2: Messenger/Facebook và một số site
         // otherwise chặn cookie third-party, khiến phiên đăng nhập không được lưu.
-        let mut extra_args = String::from("--disable-features=msTrackingPrevention");
+        let mut extra_args = String::from("--disable-features=msTrackingPrevention --disable-blink-features=AutomationControlled");
         match net::build_proxy_args(&profile_web.proxy) {
             Ok(Some(proxy_args)) => {
                 extra_args.push(' ');
