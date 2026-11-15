@@ -1,0 +1,22 @@
+[package]
+name = "henry-chat-pro"
+version = "3.0.0"
+description = "Henry Chat Pro - Multi-Account Web Workspace"
+authors = ["THEANH"]
+edition = "2021"
+
+[lib]
+name = "desktop_bubble_chat_pro_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", default-features = false }

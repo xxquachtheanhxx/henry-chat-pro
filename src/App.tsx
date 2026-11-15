@@ -1,0 +1,2705 @@
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import logoUrl from "./assets/logo.png";
+
+/* ============================================================================
+   Henry Chat Pro — Workspace đa tài khoản web
+   Mỗi tài khoản là một WebView2 riêng (do lớp Rust quản lý), giữ phiên đăng nhập
+   độc lập. React chỉ lo giao diện: danh sách tài khoản, nền tảng, thông báo,
+   và các bảng thêm/sửa. Không còn kho dữ liệu Zalo / backup / Google Drive.
+   ============================================================================ */
+
+export interface PlatformItem {
+  id: string;
+  name: string;
+  url: string;
+  color: string;
+  badge: string;
+  isBuiltIn?: boolean;
+}
+
+export interface ProxyConfig {
+  enabled: boolean;
+  kind: "http" | "socks5";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  bypass: string;
+}
+
+/** Cấu hình web riêng của profile (schema v3). P2 sẽ thêm `fingerprint` vào đây. */
+export interface ProfileWebConfig {
+  proxy: ProxyConfig;
+}
+
+export interface ProxyTestResult {
+  ok: boolean;
+  ip: string;
+  latency_ms: number;
+  via: string;
+  message: string;
+}
+
+export interface AccountProfile {
+  id: string;
+  name: string;
+  platformId: string;
+  customUrl?: string;
+  avatarDataUrl?: string;
+  pinned?: boolean;
+  notificationsEnabled?: boolean;
+  /** Schema v3: cấu hình mạng/vân tay riêng cho từng profile. */
+  web?: ProfileWebConfig;
+  createdAt: number;
+}
+
+export interface ProfileAlertEvent {
+  profile_id: string;
+  platform: string;
+  kind: string;
+  unread_count: number;
+  title: string;
+  body: string;
+  caller: string;
+  call_kind: string;
+  timestamp: number;
+}
+
+export interface ProfileAlertState {
+  unreadCount: number;
+  lastTitle?: string;
+  lastBody?: string;
+  lastAt?: number;
+  hasIncomingCall: boolean;
+  caller?: string;
+  callKind?: string;
+}
+
+export interface NotificationItem {
+  id: string;
+  profileId: string;
+  title: string;
+  body?: string;
+  isCall?: boolean;
+  unread: number;
+  at: number;
+}
+
+export interface AlertToastItem {
+  id: string;
+  profileId: string;
+  profileName: string;
+  platformName: string;
+  title: string;
+  body: string;
+  isCall: boolean;
+  timestamp: number;
+}
+
+export interface WorkspaceSettings {
+  muteSound: boolean;
+  alwaysOnTop: boolean;
+  /** Số WebView giữ chạy đồng thời (0 = không giới hạn) */
+  maxLiveWebviews: number;
+}
+
+export type SidebarMode = "full" | "collapsed";
+
+const SIDEBAR_WIDTH_MAP: Record<SidebarMode, number> = {
+  full: 310,
+  collapsed: 68,
+};
+
+const CUSTOM_URL_OPTION_VALUE = "__custom_url__";
+
+const DEFAULT_PROXY: ProxyConfig = {
+  enabled: false,
+  kind: "http",
+  host: "",
+  port: 0,
+  username: "",
+  password: "",
+  bypass: "",
+};
+
+function normalizeProxy(input?: Partial<ProxyConfig> | null): ProxyConfig {
+  const src = input || {};
+  return {
+    enabled: !!src.enabled,
+    kind: src.kind === "socks5" ? "socks5" : "http",
+    host: String(src.host || "").trim(),
+    port: Math.max(0, Math.min(65535, Number(src.port) || 0)),
+    username: String(src.username || ""),
+    password: String(src.password || ""),
+    bypass: String(src.bypass || "").trim(),
+  };
+}
+
+/** Chuỗi JSON gửi xuống Rust để tạo WebView với proxy của profile. */
+function webConfigJson(acc: AccountProfile | null): string {
+  const proxy = normalizeProxy(acc?.web?.proxy);
+  return JSON.stringify({ proxy });
+}
+
+const LS_PLATFORMS = "bch_pro_platforms_v1";
+const LS_ACCOUNTS = "bch_pro_accounts_v1";
+const LS_SIDEBAR = "bch_pro_sidebar_mode_v1";
+const LS_SETTINGS = "bch_pro_settings_v1";
+const LS_SELECTED = "bch_pro_selected_account_v1";
+/** Profile đã bị người dùng xoá hẳn — không tự khôi phục lại từ đĩa. */
+const LS_DELETED = "bch_pro_deleted_profiles_v1";
+const LS_NOTIF = "bch_pro_notification_log_v1";
+const MAX_NOTIFICATIONS = 60;
+
+const DEFAULT_PLATFORMS: PlatformItem[] = [
+  {
+    id: "zalo",
+    name: "Zalo Web",
+    url: "https://chat.zalo.me",
+    color: "#0068FF",
+    badge: "ZL",
+    isBuiltIn: true,
+  },
+  {
+    id: "messenger",
+    name: "Messenger",
+    url: "https://www.messenger.com",
+    color: "#8B5CF6",
+    badge: "MS",
+    isBuiltIn: true,
+  },
+  {
+    id: "telegram",
+    name: "Telegram",
+    url: "https://web.telegram.org/k/",
+    color: "#0284C7",
+    badge: "TG",
+    isBuiltIn: true,
+  },
+  {
+    id: "whatsapp",
+    name: "WhatsApp",
+    url: "https://web.whatsapp.com",
+    color: "#10B981",
+    badge: "WA",
+    isBuiltIn: true,
+  },
+];
+
+const DEFAULT_ACCOUNTS: AccountProfile[] = [
+  {
+    id: "zalo_cong_viec",
+    name: "Zalo Công Việc",
+    platformId: "zalo",
+    pinned: true,
+    createdAt: Date.now() - 120000,
+  },
+  {
+    id: "zalo_ca_nhan",
+    name: "Zalo Cá Nhân",
+    platformId: "zalo",
+    createdAt: Date.now() - 90000,
+  },
+  {
+    id: "messenger_chinh",
+    name: "Messenger Chính",
+    platformId: "messenger",
+    createdAt: Date.now() - 60000,
+  },
+  {
+    id: "tele_main",
+    name: "Telegram Chính",
+    platformId: "telegram",
+    createdAt: Date.now() - 30000,
+  },
+];
+
+const TAURI_READY = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/** Gọi lệnh Tauri an toàn: khi mở bằng trình duyệt thường (vite preview) sẽ bỏ qua thay vì crash. */
+async function callTauri<T>(
+  cmd: string,
+  args?: Record<string, unknown>
+): Promise<T | null> {
+  if (!TAURI_READY) return null;
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (err) {
+    console.warn(`[bubble-chat] lệnh ${cmd} thất bại:`, err);
+    return null;
+  }
+}
+
+let storageWarning = "";
+
+function loadJson<T>(key: string, fallback: T): T {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as T;
+    return parsed ?? fallback;
+  } catch {
+    // Dữ liệu hỏng: giữ bản gốc để chẩn đoán thay vì ghi đè bằng dữ liệu mặc định.
+    storageWarning =
+      "⚠️ Dữ liệu cài đặt bị lỗi định dạng — đã sao lưu bản gốc và khôi phục tài khoản từ đĩa.";
+    try {
+      if (raw) localStorage.setItem(`${key}__corrupt_backup`, raw);
+    } catch {
+      /* bỏ qua */
+    }
+    return fallback;
+  }
+}
+
+/** Ghi localStorage; nếu vượt hạn mức thì bỏ bớt ảnh đại diện (dữ liệu lớn nhất) rồi thử lại. */
+function saveJson(key: string, value: unknown): boolean {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    try {
+      const slim = JSON.stringify(value, (k, v) => (k === "avatarDataUrl" ? undefined : v));
+      localStorage.setItem(key, slim);
+      return false;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function normalizeUrl(raw: string): string {
+  const t = (raw || "").trim();
+  if (!t) return "";
+  if (/^https?:\/\//i.test(t)) return t;
+  return `https://${t}`;
+}
+
+function makeAccountId(): string {
+  return `acc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function makePlatformId(): string {
+  return `plat_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * Bổ sung nền tảng còn thiếu cho các tài khoản cũ: dữ liệu từ phiên bản trước có thể trỏ tới
+ * một platformId không còn trong danh sách nền tảng (nền tảng tự thêm đã bị xóa), khiến tên
+ * hiển thị thành id thô và số đếm trên chip không khớp tổng số tài khoản.
+ */
+function reconcilePlatforms(
+  platforms: PlatformItem[],
+  accounts: AccountProfile[]
+): PlatformItem[] {
+  const known = new Set(platforms.map((p) => p.id));
+  const extras: PlatformItem[] = [];
+
+  accounts.forEach((acc) => {
+    if (!acc.platformId || known.has(acc.platformId)) return;
+    known.add(acc.platformId);
+
+    let host = "";
+    try {
+      host = new URL(normalizeUrl(acc.customUrl || "")).hostname.replace(/^www\./, "");
+    } catch {
+      host = "";
+    }
+    const label = host || acc.platformId;
+    extras.push({
+      id: acc.platformId,
+      name: label,
+      url: acc.customUrl ? normalizeUrl(acc.customUrl) : "",
+      color: "#64748B",
+      badge: label.slice(0, 2).toUpperCase(),
+    });
+  });
+
+  return extras.length > 0 ? [...platforms, ...extras] : platforms;
+}
+
+function playAlertTone(isCall: boolean) {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const playBeep = (freq: number, startOffset: number, dur: number, vol: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = isCall ? "triangle" : "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset);
+      gain.gain.setValueAtTime(0.001, ctx.currentTime + startOffset);
+      gain.gain.exponentialRampToValueAtTime(vol, ctx.currentTime + startOffset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startOffset + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + startOffset);
+      osc.stop(ctx.currentTime + startOffset + dur + 0.02);
+    };
+    if (isCall) {
+      playBeep(784, 0, 0.22, 0.14);
+      playBeep(987.77, 0.25, 0.28, 0.16);
+      playBeep(1174.66, 0.56, 0.34, 0.14);
+    } else {
+      playBeep(660, 0, 0.14, 0.09);
+      playBeep(880, 0.15, 0.22, 0.08);
+    }
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 1500);
+  } catch {}
+}
+
+/** Nén ảnh đại diện về 128×128 để nhẹ localStorage. */
+function resizeImageToDataUrl(file: File, maxSize = 128): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = maxSize;
+        canvas.height = maxSize;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(String(reader.result || ""));
+          return;
+        }
+        const minSide = Math.min(img.width, img.height);
+        const sx = (img.width - minSide) / 2;
+        const sy = (img.height - minSide) / 2;
+        ctx.clearRect(0, 0, maxSize, maxSize);
+        ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, maxSize, maxSize);
+        resolve(canvas.toDataURL("image/png", 0.92));
+      };
+      img.onerror = () => reject(new Error("Không đọc được định dạng ảnh này"));
+      img.src = String(reader.result || "");
+    };
+    reader.onerror = () => reject(new Error("Lỗi đọc file ảnh"));
+    reader.readAsDataURL(file);
+  });
+}
+
+export default function App() {
+  /* ------------------------------- Dữ liệu ------------------------------- */
+  const [platforms, setPlatforms] = useState<PlatformItem[]>(() => {
+    const saved = loadJson<PlatformItem[]>(LS_PLATFORMS, DEFAULT_PLATFORMS);
+    const base = Array.isArray(saved) && saved.length > 0 ? saved : DEFAULT_PLATFORMS;
+    return reconcilePlatforms(base, loadJson<AccountProfile[]>(LS_ACCOUNTS, []));
+  });
+
+  const [accounts, setAccounts] = useState<AccountProfile[]>(() => {
+    // Chỉ seed dữ liệu mẫu khi THẬT SỰ chưa có gì. Nếu dữ liệu đã lưu bị hỏng thì giữ
+    // danh sách rỗng (không ghi đè) để bước khôi phục từ đĩa dựng lại tài khoản.
+    if (!localStorage.getItem(LS_ACCOUNTS)) return DEFAULT_ACCOUNTS;
+    const saved = loadJson<AccountProfile[] | null>(LS_ACCOUNTS, null);
+    return Array.isArray(saved) ? saved : [];
+  });
+
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
+    localStorage.getItem(LS_SIDEBAR) === "collapsed" ? "collapsed" : "full"
+  );
+
+  const [selectedAccountId, setSelectedAccountId] = useState<string>(() => {
+    const saved = localStorage.getItem(LS_SELECTED);
+    if (saved) return saved;
+    const first = loadJson<AccountProfile[]>(LS_ACCOUNTS, DEFAULT_ACCOUNTS)[0];
+    return first?.id || "";
+  });
+
+  const [selectedPlatformFilter, setSelectedPlatformFilter] = useState<string>("all");
+  const [settings, setSettings] = useState<WorkspaceSettings>(() => {
+    const saved = loadJson<Partial<WorkspaceSettings>>(LS_SETTINGS, {});
+    return {
+      muteSound: !!saved.muteSound,
+      alwaysOnTop: !!saved.alwaysOnTop,
+      maxLiveWebviews:
+        typeof saved.maxLiveWebviews === "number" ? saved.maxLiveWebviews : 3,
+    };
+  });
+
+  /* ------------------------- Thông báo / cuộc gọi ------------------------- */
+  const [profileAlerts, setProfileAlerts] = useState<Record<string, ProfileAlertState>>({});
+  const [alertToasts, setAlertToasts] = useState<AlertToastItem[]>([]);
+
+  /* ------------------------ Trung tâm thông báo ------------------------- */
+  const [showInbox, setShowInbox] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
+    loadJson<NotificationItem[]>(LS_NOTIF, [])
+  );
+  const [replyTargetId, setReplyTargetId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replySending, setReplySending] = useState(false);
+
+  /* -------------------------------- Modals -------------------------------- */
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [showEditAccount, setShowEditAccount] = useState(false);
+  const [showAddPlatform, setShowAddPlatform] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AccountProfile | null>(null);
+
+  /* ------------------------------ Form state ------------------------------ */
+  const [newAccName, setNewAccName] = useState("");
+  const [newAccPlatformId, setNewAccPlatformId] = useState("zalo");
+  const [newAccCustomUrl, setNewAccCustomUrl] = useState("");
+  const [newAccNotify, setNewAccNotify] = useState(true);
+  const [newAccAvatar, setNewAccAvatar] = useState<string | undefined>(undefined);
+
+  const [editingAccount, setEditingAccount] = useState<AccountProfile | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editCustomUrl, setEditCustomUrl] = useState("");
+  const [editNotify, setEditNotify] = useState(true);
+  const [editAvatar, setEditAvatar] = useState<string | undefined>(undefined);
+  const [editTab, setEditTab] = useState<"general" | "network">("general");
+  const [editProxy, setEditProxy] = useState<ProxyConfig>(DEFAULT_PROXY);
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyResult, setProxyResult] = useState<ProxyTestResult | null>(null);
+  const [bridgeStatus, setBridgeStatus] = useState("");
+  /** Tăng lên để buộc tạo lại WebView (áp dụng proxy mới). */
+  const [webConfigVersion, setWebConfigVersion] = useState(0);
+
+  const [newPlatName, setNewPlatName] = useState("");
+  const [newPlatUrl, setNewPlatUrl] = useState("");
+  const [newPlatColor, setNewPlatColor] = useState("#6366F1");
+  const [newPlatBadge, setNewPlatBadge] = useState("");
+
+  const [statusMessage, setStatusMessage] = useState(
+    "Sẵn sàng — mỗi tài khoản giữ phiên đăng nhập riêng"
+  );
+
+  /* -------------------------------- Helper -------------------------------- */
+  const getPlatform = useCallback(
+    (id: string): PlatformItem => {
+      return (
+        platforms.find((p) => p.id === id) || {
+          id,
+          name: id,
+          url: "",
+          color: "#475569",
+          badge: (id || "?").slice(0, 2).toUpperCase(),
+        }
+      );
+    },
+    [platforms]
+  );
+
+  const accountUrl = useCallback(
+    (acc: AccountProfile): string => {
+      const plat = getPlatform(acc.platformId);
+      return normalizeUrl((acc.customUrl || "").trim() || plat.url);
+    },
+    [getPlatform]
+  );
+
+  const anyModalOpen =
+    showSettings ||
+    showAddAccount ||
+    showEditAccount ||
+    showAddPlatform ||
+    showInbox ||
+    deleteTarget !== null;
+
+  const closeAllModals = useCallback(() => {
+    setShowSettings(false);
+    setShowAddAccount(false);
+    setShowEditAccount(false);
+    setShowAddPlatform(false);
+    setShowInbox(false);
+    setDeleteTarget(null);
+  }, []);
+
+  const flashStatus = useCallback((msg: string) => {
+    setStatusMessage(msg);
+  }, []);
+
+  /* ----------------------------- Persistence ------------------------------ */
+  useEffect(() => {
+    saveJson(LS_PLATFORMS, platforms);
+  }, [platforms]);
+
+  useEffect(() => {
+    if (!saveJson(LS_ACCOUNTS, accounts)) {
+      flashStatus("⚠️ Bộ nhớ lưu trữ đầy: đã lưu danh sách tài khoản không kèm ảnh đại diện.");
+    }
+  }, [accounts]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_SIDEBAR, sidebarMode);
+    void callTauri("set_sidebar_width", { width: SIDEBAR_WIDTH_MAP[sidebarMode] });
+  }, [sidebarMode]);
+
+  useEffect(() => {
+    saveJson(LS_SETTINGS, settings);
+  }, [settings]);
+
+  useEffect(() => {
+    saveJson(LS_NOTIF, notifications.slice(0, MAX_NOTIFICATIONS));
+  }, [notifications]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_SELECTED, selectedAccountId);
+  }, [selectedAccountId]);
+
+  // Cửa sổ chính được tạo ở trạng thái ẩn: hiện nó sau khi React đã vẽ xong khung chat
+  // (tránh khung trắng của WebView2 khi khởi động).
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    void callTauri("show_main_window");
+  }, []);
+
+  // Tự khôi phục tài khoản bị mất khỏi danh sách, theo 2 nguồn:
+  //  1) bản sao lưu `workspace_snapshot.json` trên đĩa (đủ tên/URL/nền tảng)
+  //  2) các thư mục `chat_profiles/<nền tảng>/<mã>` còn sót — giữ nguyên phiên đăng nhập
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    let cancelled = false;
+    void (async () => {
+      const [dirs, snapRaw] = await Promise.all([
+        callTauri<string[]>("list_profile_dirs"),
+        callTauri<string>("load_workspace_snapshot"),
+      ]);
+      if (cancelled) return;
+
+      let snapAccounts: AccountProfile[] = [];
+      let snapPlatforms: PlatformItem[] = [];
+      if (typeof snapRaw === "string" && snapRaw) {
+        try {
+          const parsed = JSON.parse(snapRaw) as {
+            accounts?: AccountProfile[];
+            platforms?: PlatformItem[];
+          };
+          if (Array.isArray(parsed.accounts)) snapAccounts = parsed.accounts;
+          if (Array.isArray(parsed.platforms)) snapPlatforms = parsed.platforms;
+        } catch {
+          /* bản sao lưu hỏng thì bỏ qua */
+        }
+      }
+
+      // Bổ sung tên/URL còn thiếu từ bản sao lưu (vd. thẻ vừa dựng lại bằng placeholder).
+      const mergedAccounts = accounts.map((a) => {
+        const fromBackup = snapAccounts.find((s) => s.id === a.id);
+        if (
+          fromBackup &&
+          a.name.startsWith("Khôi phục ·") &&
+          typeof fromBackup.name === "string" &&
+          !fromBackup.name.startsWith("Khôi phục ·")
+        ) {
+          return { ...a, name: fromBackup.name, customUrl: fromBackup.customUrl };
+        }
+        return a;
+      });
+      const mergedPlatforms = platforms.map((p) => {
+        const fromBackup = snapPlatforms.find((s) => s.id === p.id);
+        if (fromBackup && (!p.url || p.url === "") && fromBackup.url) {
+          return { ...p, name: fromBackup.name, url: fromBackup.url, color: fromBackup.color || p.color };
+        }
+        return p;
+      });
+
+      let baseAccounts = mergedAccounts;
+      let basePlatforms = mergedPlatforms;
+      let restoredFromBackup = false;
+      if (baseAccounts.length === 0 && snapAccounts.length > 0) {
+        baseAccounts = snapAccounts;
+        if (snapPlatforms.length > 0) basePlatforms = snapPlatforms;
+        restoredFromBackup = true;
+      }
+
+      const tombstones = loadJson<string[]>(LS_DELETED, []);
+      const known = new Set(baseAccounts.map((a) => `${a.platformId}/${a.id}`));
+      const diskDirs = Array.isArray(dirs) ? dirs : [];
+      const missing = diskDirs.filter((d) => !known.has(d) && !tombstones.includes(d));
+
+      const recovered: AccountProfile[] = missing.map((entry) => {
+        const [platformId, profileId] = entry.split("/");
+        const fromBackup = snapAccounts.find((a) => a.id === profileId);
+        if (fromBackup) {
+          return { ...fromBackup, platformId: fromBackup.platformId || platformId };
+        }
+        return {
+          id: profileId,
+          name: `Khôi phục · ${profileId}`,
+          platformId,
+          notificationsEnabled: true,
+          createdAt: Date.now(),
+        };
+      });
+
+      const namesChanged = mergedAccounts.some((a, i) => a.name !== accounts[i]?.name);
+      if (recovered.length === 0 && !restoredFromBackup && !namesChanged) return;
+
+      const knownPlatforms = new Set(basePlatforms.map((p) => p.id));
+      const newPlatforms: PlatformItem[] = Array.from(
+        new Set(recovered.map((a) => a.platformId))
+      )
+        .filter((id) => !knownPlatforms.has(id))
+        .map((id) => ({
+          id,
+          name: id === "custom" ? "Trang web khôi phục" : id,
+          url: "",
+          color: "#64748B",
+          badge: id.slice(0, 2).toUpperCase(),
+        }));
+
+      setAccounts([...baseAccounts, ...recovered]);
+      setPlatforms([...basePlatforms, ...newPlatforms]);
+      flashStatus(
+        recovered.length > 0
+          ? `♻️ Đã khôi phục ${recovered.length} tài khoản từ dữ liệu trên đĩa — bấm ✎ Sửa để đặt lại tên/URL.`
+          : "♻️ Đã khôi phục danh sách tài khoản từ bản sao lưu trên đĩa."
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Bản sao lưu cấu hình ra file JSON trên đĩa (localStorage có thể bị mất).
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    void callTauri("save_workspace_snapshot", {
+      payload: JSON.stringify({ accounts, platforms, savedAt: Date.now() }),
+    });
+  }, [accounts, platforms]);
+
+  // Cảnh báo khi dữ liệu cài đặt đã lưu bị hỏng (loadJson đã tự sao lưu bản gốc).
+  useEffect(() => {
+    if (storageWarning) flashStatus(storageWarning);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    void callTauri("set_workspace_always_on_top", { alwaysOnTop: settings.alwaysOnTop });
+  }, [settings.alwaysOnTop]);
+
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    void callTauri("set_max_live_webviews", { maxLive: settings.maxLiveWebviews });
+  }, [settings.maxLiveWebviews]);
+
+  /* ----------------------- Đồng bộ danh sách & lựa chọn -------------------- */
+  const filteredAccounts = useMemo(() => {
+    const list =
+      selectedPlatformFilter === "all"
+        ? accounts
+        : accounts.filter((a) => a.platformId === selectedPlatformFilter);
+    return [...list].sort((a, b) => {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+      return a.createdAt - b.createdAt;
+    });
+  }, [accounts, selectedPlatformFilter]);
+
+  const selectedAccount = useMemo(
+    () => accounts.find((a) => a.id === selectedAccountId) || null,
+    [accounts, selectedAccountId]
+  );
+
+  // Đảm bảo tài khoản đang chọn luôn nằm trong danh sách đang lọc
+  useEffect(() => {
+    if (filteredAccounts.length === 0) return;
+    if (!filteredAccounts.some((a) => a.id === selectedAccountId)) {
+      setSelectedAccountId(filteredAccounts[0].id);
+    }
+  }, [filteredAccounts, selectedAccountId]);
+
+  /* --------------------------- WebView theo tài khoản --------------------- */
+  useEffect(() => {
+    void callTauri("set_modal_overlay_mode", { open: anyModalOpen });
+  }, [anyModalOpen]);
+
+  useEffect(() => {
+    if (anyModalOpen || !selectedAccount) return;
+    const url = accountUrl(selectedAccount);
+    if (!url) {
+      flashStatus(
+        `⚠️ "${selectedAccount.name}" chưa có địa chỉ website — bấm ✎ Sửa để thêm URL`
+      );
+      return;
+    }
+    void callTauri("switch_active_chat_account", {
+      platform: selectedAccount.platformId,
+      url,
+      profileId: selectedAccount.id,
+      profileName: selectedAccount.name,
+      sidebarWidth: SIDEBAR_WIDTH_MAP[sidebarMode],
+      webConfig: webConfigJson(selectedAccount),
+    });
+  }, [anyModalOpen, selectedAccount, sidebarMode, accountUrl, flashStatus, webConfigVersion]);
+
+  /* --------------------- Lắng nghe sự kiện từ WebView --------------------- */
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
+  const muteRef = useRef(settings.muteSound);
+  muteRef.current = settings.muteSound;
+  const lastSoundAtRef = useRef(0);
+
+  const pushToast = useCallback((toast: AlertToastItem) => {
+    setAlertToasts((prev) => [toast, ...prev.filter((t) => t.profileId !== toast.profileId)].slice(0, 4));
+    window.setTimeout(() => {
+      setAlertToasts((prev) => prev.filter((t) => t.id !== toast.id));
+    }, 12000);
+  }, []);
+
+  const handleAlert = useCallback(
+    (evt: ProfileAlertEvent) => {
+      const kind = (evt.kind || "").toLowerCase();
+      const profileId = evt.profile_id || "";
+      if (!profileId) return;
+
+      if (kind === "switch_profile") {
+        setSelectedAccountId(profileId);
+        return;
+      }
+
+      const acc = accountsRef.current.find((a) => a.id === profileId);
+      const notifyOn = acc ? acc.notificationsEnabled !== false : true;
+
+      setProfileAlerts((prev) => {
+        const cur: ProfileAlertState =
+          prev[profileId] || { unreadCount: 0, hasIncomingCall: false };
+        const unread = Math.max(0, Math.min(999, evt.unread_count || 0));
+
+        if (kind === "unread") {
+          return { ...prev, [profileId]: { ...cur, unreadCount: unread } };
+        }
+        if (kind === "message") {
+          return {
+            ...prev,
+            [profileId]: {
+              ...cur,
+              unreadCount: Math.max(unread, Math.min(999, cur.unreadCount + 1)),
+              lastTitle: evt.title || cur.lastTitle,
+              lastBody: evt.body || cur.lastBody,
+              lastAt: evt.timestamp || Date.now(),
+            },
+          };
+        }
+        if (kind === "call_start") {
+          return {
+            ...prev,
+            [profileId]: {
+              ...cur,
+              unreadCount: Math.max(unread, cur.unreadCount),
+              hasIncomingCall: true,
+              caller: evt.caller || cur.caller,
+              callKind: evt.call_kind || cur.callKind,
+              lastAt: evt.timestamp || Date.now(),
+            },
+          };
+        }
+        if (kind === "call_end") {
+          return { ...prev, [profileId]: { ...cur, hasIncomingCall: false } };
+        }
+        return prev;
+      });
+
+      if (!notifyOn) return;
+
+      const isCall = kind === "call_start";
+      if (kind === "message" || isCall) {
+        pushToast({
+          id: `${profileId}_${Date.now()}`,
+          profileId,
+          profileName: acc?.name || profileId,
+          platformName: getPlatform(acc?.platformId || evt.platform).name,
+          title: isCall ? "📞 Cuộc gọi đến" : evt.title || "Tin nhắn mới",
+          body: isCall ? `${evt.caller || "Không rõ người gọi"} • ${evt.call_kind || "voice"}` : evt.body || "",
+          isCall,
+          timestamp: evt.timestamp || Date.now(),
+        });
+
+        if (!muteRef.current) {
+          const now = Date.now();
+          if (isCall || now - lastSoundAtRef.current > 2500) {
+            lastSoundAtRef.current = now;
+            playAlertTone(isCall);
+          }
+        }
+
+        // Ghi vào trung tâm thông báo (danh sách đọc lại & trả lời nhanh)
+        const entry: NotificationItem = {
+          id: `${profileId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          profileId,
+          title: isCall ? "📞 Cuộc gọi đến" : evt.title || "Tin nhắn mới",
+          body: isCall
+            ? `${evt.caller || "Không rõ người gọi"} • ${evt.call_kind || "voice"}`
+            : evt.body || "",
+          isCall,
+          unread: Math.max(0, evt.unread_count || 0),
+          at: evt.timestamp || Date.now(),
+        };
+        setNotifications((prev) => [entry, ...prev].slice(0, MAX_NOTIFICATIONS));
+      }
+    },
+    [getPlatform, pushToast]
+  );
+
+  const alertHandlerRef = useRef(handleAlert);
+  alertHandlerRef.current = handleAlert;
+
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<ProfileAlertEvent>("bch-profile-event", (event) => {
+      alertHandlerRef.current(event.payload);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  /* --------------------------- Bridge v2 (pane → app) --------------------- */
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<{ profile_id: string; platform: string; op: string; ok: boolean }>(
+      "bch-bridge-message",
+      (event) => {
+        const payload = event.payload;
+        if (payload?.op !== "ping") return;
+        setBridgeStatus(
+          payload.ok
+            ? `✅ Bridge v2 hoạt động — ${payload.platform} • ${payload.profile_id}`
+            : "⚠️ Bridge có phản hồi nhưng báo lỗi."
+        );
+      }
+    )
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  /* ------------------------------- Keyboard ------------------------------- */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && anyModalOpen) {
+        e.preventDefault();
+        closeAllModals();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [anyModalOpen, closeAllModals]);
+
+  /* ------------------------------- Actions -------------------------------- */
+  const selectAccount = useCallback(
+    (acc: AccountProfile) => {
+      closeAllModals();
+      setSelectedAccountId(acc.id);
+      setAlertToasts((prev) => prev.filter((t) => t.profileId !== acc.id));
+    },
+    [closeAllModals]
+  );
+
+  // Phím tắt chuyển nhanh tài khoản: Ctrl+1…9 mở tài khoản theo thứ tự đang hiển thị,
+  // Ctrl+Tab / Ctrl+Shift+Tab chuyển kế tiếp / quay lại.
+  useEffect(() => {
+    if (!TAURI_READY) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const el = event.target as HTMLElement | null;
+      const typing =
+        !!el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable);
+      if (typing) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+
+      if (event.key === "Tab") {
+        if (filteredAccounts.length < 2) return;
+        event.preventDefault();
+        const current = filteredAccounts.findIndex((a) => a.id === selectedAccountId);
+        const step = event.shiftKey ? -1 : 1;
+        const next =
+          filteredAccounts[(current + step + filteredAccounts.length) % filteredAccounts.length];
+        if (next) selectAccount(next);
+        return;
+      }
+
+      if (event.shiftKey || !/^[1-9]$/.test(event.key)) return;
+      const acc = filteredAccounts[Number(event.key) - 1];
+      if (!acc) return;
+      event.preventDefault();
+      selectAccount(acc);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [filteredAccounts, selectedAccountId, selectAccount]);
+
+  const openAddAccount = useCallback(
+    (platformId?: string) => {
+      setNewAccName("");
+      setNewAccPlatformId(
+        platformId || (selectedPlatformFilter !== "all" ? selectedPlatformFilter : "zalo")
+      );
+      setNewAccCustomUrl("");
+      setNewAccNotify(true);
+      setNewAccAvatar(undefined);
+      closeAllModals();
+      setShowAddAccount(true);
+    },
+    [closeAllModals, selectedPlatformFilter]
+  );
+
+  const openEditAccount = useCallback(
+    (acc: AccountProfile) => {
+      setEditingAccount(acc);
+      setEditName(acc.name);
+      setEditCustomUrl(acc.customUrl || "");
+      setEditNotify(acc.notificationsEnabled !== false);
+      setEditAvatar(acc.avatarDataUrl);
+      setEditProxy(normalizeProxy(acc.web?.proxy));
+      setEditTab("general");
+      setProxyResult(null);
+      setBridgeStatus("");
+      closeAllModals();
+      setShowEditAccount(true);
+    },
+    [closeAllModals]
+  );
+
+  const testProfileProxy = async () => {
+    if (!TAURI_READY) {
+      setProxyResult({
+        ok: false,
+        ip: "",
+        latency_ms: 0,
+        via: "",
+        message: "Chỉ kiểm tra được khi chạy app Tauri (không phải trình duyệt).",
+      });
+      return;
+    }
+    setProxyTesting(true);
+    setProxyResult(null);
+    const res = await callTauri<ProxyTestResult>("test_profile_proxy", {
+      webConfig: JSON.stringify({ proxy: normalizeProxy(editProxy) }),
+    });
+    setProxyTesting(false);
+    if (!res) {
+      setProxyResult({
+        ok: false,
+        ip: "",
+        latency_ms: 0,
+        via: "",
+        message: "Không kiểm tra được — xem log ứng dụng để biết lỗi.",
+      });
+      return;
+    }
+    setProxyResult(res);
+  };
+
+  const pingBridge = async () => {
+    if (!editingAccount) return;
+    if (!TAURI_READY) {
+      setBridgeStatus("Chỉ kiểm tra được khi chạy app Tauri.");
+      return;
+    }
+    setBridgeStatus("⏳ Đang chờ khung chat phản hồi…");
+    const res = await callTauri("bch_bridge_ping", {
+      platform: editingAccount.platformId,
+      profileId: editingAccount.id,
+    });
+    if (res === null) {
+      setBridgeStatus(
+        "⚠️ Chưa kiểm tra được: hãy mở tài khoản này (bấm vào tài khoản ở cột trái) rồi thử lại."
+      );
+      return;
+    }
+    window.setTimeout(() => {
+      setBridgeStatus((cur) =>
+        cur === "⏳ Đang chờ khung chat phản hồi…"
+          ? "⚠️ Không có phản hồi: khung chat chưa mở hoặc trang chưa tải xong (bản bridge v2 cần WebView2 khởi động lại một lần)."
+          : cur
+      );
+    }, 4500);
+  };
+
+  const createAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newAccName.trim();
+    if (!name) {
+      alert("Vui lòng nhập tên tài khoản.");
+      return;
+    }
+    const plat = getPlatform(newAccPlatformId);
+    const custom = newAccCustomUrl.trim();
+    if (!custom && !plat.url) {
+      alert("Nền tảng này chưa có URL. Hãy nhập URL riêng cho tài khoản.");
+      return;
+    }
+
+    const acc: AccountProfile = {
+      id: makeAccountId(),
+      name,
+      platformId: plat.id,
+      customUrl: custom ? normalizeUrl(custom) : undefined,
+      avatarDataUrl: newAccAvatar,
+      notificationsEnabled: newAccNotify,
+      pinned: false,
+      createdAt: Date.now(),
+    };
+
+    setAccounts((prev) => [...prev, acc]);
+    if (custom || plat.url) {
+      setSelectedPlatformFilter("all");
+      setSelectedAccountId(acc.id);
+    }
+    setShowAddAccount(false);
+    flashStatus(`Đã thêm tài khoản "${name}" — đang mở phiên đăng nhập riêng`);
+  };
+
+  const saveEditAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAccount) return;
+    const name = editName.trim();
+    if (!name) {
+      alert("Vui lòng nhập tên tài khoản.");
+      return;
+    }
+    const custom = editCustomUrl.trim();
+    const nextProxy = normalizeProxy(editProxy);
+    if (nextProxy.enabled && (!nextProxy.host || !nextProxy.port)) {
+      alert("Proxy đang bật nhưng thiếu địa chỉ hoặc cổng.");
+      return;
+    }
+    const wasSelected = selectedAccountId === editingAccount.id;
+    const oldProxy = normalizeProxy(editingAccount.web?.proxy);
+    const proxyChanged =
+      wasSelected && JSON.stringify(oldProxy) !== JSON.stringify(nextProxy);
+
+    setAccounts((prev) =>
+      prev.map((a) =>
+        a.id === editingAccount.id
+          ? {
+              ...a,
+              name,
+              customUrl: custom ? normalizeUrl(custom) : undefined,
+              notificationsEnabled: editNotify,
+              avatarDataUrl: editAvatar,
+              web: { ...(a.web || { proxy: DEFAULT_PROXY }), proxy: nextProxy },
+            }
+          : a
+      )
+    );
+    void callTauri("set_profile_notifications_enabled", {
+      platform: editingAccount.platformId,
+      profileId: editingAccount.id,
+      enabled: editNotify,
+    });
+    setShowEditAccount(false);
+
+    if (proxyChanged) {
+      // Proxy chỉ áp dụng được lúc WebView khởi tạo → đóng rồi mở lại tài khoản.
+      void (async () => {
+        await callTauri("close_chat_window", {
+          platform: editingAccount.platformId,
+          profileId: editingAccount.id,
+        });
+        setWebConfigVersion((v) => v + 1);
+      })();
+      flashStatus(
+        nextProxy.enabled
+          ? `🌐 Đã bật proxy cho "${name}" — đang mở lại khung chat`
+          : `Đã tắt proxy cho "${name}" — đang mở lại khung chat`
+      );
+      return;
+    }
+    flashStatus(`Đã cập nhật tài khoản "${name}"`);
+  };
+
+  const togglePin = (acc: AccountProfile) => {
+    setAccounts((prev) =>
+      prev.map((a) => (a.id === acc.id ? { ...a, pinned: !a.pinned } : a))
+    );
+  };
+
+  const toggleNotifications = (acc: AccountProfile) => {
+    const enabled = acc.notificationsEnabled === false;
+    setAccounts((prev) =>
+      prev.map((a) => (a.id === acc.id ? { ...a, notificationsEnabled: enabled } : a))
+    );
+    void callTauri("set_profile_notifications_enabled", {
+      platform: acc.platformId,
+      profileId: acc.id,
+      enabled,
+    });
+    flashStatus(
+      enabled ? `🔔 Đã bật thông báo cho "${acc.name}"` : `🔕 Đã tắt thông báo cho "${acc.name}"`
+    );
+  };
+
+  const openNotificationCenter = useCallback(() => {
+    closeAllModals();
+    setShowInbox(true);
+  }, [closeAllModals]);
+
+  const sendReply = async (item: NotificationItem, send: boolean) => {
+    const acc = accounts.find((a) => a.id === item.profileId);
+    if (!acc) {
+      flashStatus("⚠️ Tài khoản của thông báo này không còn trong danh sách");
+      return;
+    }
+    const text = replyText.trim();
+    if (!text) return;
+
+    setReplySending(true);
+    const res = await callTauri<string>("send_chat_message", {
+      platform: acc.platformId,
+      profileId: acc.id,
+      text,
+      send,
+    });
+    setReplySending(false);
+
+    if (res === null) {
+      flashStatus(
+        `⚠️ Không gửi được vào "${acc.name}": khung chat chưa mở. Bấm Mở tài khoản rồi thử lại.`
+      );
+      return;
+    }
+    setReplyTargetId(null);
+    setReplyText("");
+    flashStatus(
+      send
+        ? `📤 Đã gửi tin nhắn vào khung chat của "${acc.name}"`
+        : `📝 Đã điền vào ô chat của "${acc.name}" — bấm Mở để kiểm tra rồi nhấn Enter trong khung chat`
+    );
+  };
+
+  const reloadAccount = (acc: AccountProfile) => {
+    void callTauri("reload_chat_account", {
+      platform: acc.platformId,
+      profileId: acc.id,
+    });
+    flashStatus(`🔄 Đã tải lại "${acc.name}"`);
+  };
+
+  const openInBrowser = (acc: AccountProfile) => {
+    const url = accountUrl(acc);
+    if (!url) return;
+    void callTauri("open_system_browser", { url });
+    flashStatus(`🌐 Đã mở "${acc.name}" bằng trình duyệt hệ thống`);
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    const remaining = accounts.filter((a) => a.id !== target.id);
+    // Ghi "bia mộ" để bước khôi phục từ đĩa không dựng lại tài khoản vừa xoá.
+    const deletedKey = `${target.platformId}/${target.id}`;
+    const tombstones = loadJson<string[]>(LS_DELETED, []);
+    if (!tombstones.includes(deletedKey)) {
+      saveJson(LS_DELETED, [...tombstones, deletedKey]);
+    }
+    setAccounts(remaining);
+    setProfileAlerts((prev) => {
+      const next = { ...prev };
+      delete next[target.id];
+      return next;
+    });
+    setAlertToasts((prev) => prev.filter((t) => t.profileId !== target.id));
+    setDeleteTarget(null);
+
+    await callTauri("delete_chat_profile_completely", {
+      platform: target.platformId,
+      profileId: target.id,
+    });
+
+    if (selectedAccountId === target.id) {
+      setSelectedAccountId(remaining[0]?.id || "");
+    }
+    flashStatus(`Đã xóa tài khoản "${target.name}" cùng dữ liệu đăng nhập của nó`);
+  };
+
+  const createPlatform = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newPlatName.trim();
+    const url = normalizeUrl(newPlatUrl);
+    if (!name) {
+      alert("Vui lòng nhập tên nền tảng.");
+      return;
+    }
+    if (!url) {
+      alert("Vui lòng nhập địa chỉ website.");
+      return;
+    }
+    try {
+      new URL(url);
+    } catch {
+      alert("Địa chỉ website không hợp lệ.");
+      return;
+    }
+    const badge = (newPlatBadge.trim() || name.slice(0, 2)).toUpperCase().slice(0, 3);
+    const plat: PlatformItem = {
+      id: makePlatformId(),
+      name,
+      url,
+      color: newPlatColor || "#6366F1",
+      badge,
+    };
+    setPlatforms((prev) => [...prev, plat]);
+    setSelectedPlatformFilter(plat.id);
+    setShowAddPlatform(false);
+    setNewPlatName("");
+    setNewPlatUrl("");
+    setNewPlatBadge("");
+    flashStatus(`Đã thêm nền tảng "${name}"`);
+  };
+
+  const deletePlatform = (plat: PlatformItem) => {
+    const used = accounts.filter((a) => a.platformId === plat.id).length;
+    if (used > 0) {
+      alert(`Nền tảng "${plat.name}" đang có ${used} tài khoản. Hãy xóa các tài khoản đó trước.`);
+      return;
+    }
+    if (!window.confirm(`Xóa nền tảng "${plat.name}"?`)) return;
+    setPlatforms((prev) => prev.filter((p) => p.id !== plat.id));
+    if (selectedPlatformFilter === plat.id) setSelectedPlatformFilter("all");
+    flashStatus(`Đã xóa nền tảng "${plat.name}"`);
+  };
+
+  const handleAvatarPick = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    apply: (dataUrl: string) => void
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      apply(await resizeImageToDataUrl(file));
+    } catch (err) {
+      alert(String(err));
+    }
+  };
+
+  const exitApp = async () => {
+    if (!window.confirm("Thoát Henry Chat Pro? Các phiên đăng nhập vẫn được giữ lại cho lần mở sau.")) {
+      return;
+    }
+    await callTauri("confirm_and_exit_app");
+  };
+
+  const enableAllNotifications = () => {
+    setAccounts((prev) => prev.map((a) => ({ ...a, notificationsEnabled: true })));
+    accounts.forEach((acc) => {
+      void callTauri("set_profile_notifications_enabled", {
+        platform: acc.platformId,
+        profileId: acc.id,
+        enabled: true,
+      });
+    });
+    flashStatus("🔔 Đã bật thông báo cho tất cả tài khoản");
+  };
+
+  /* ------------------------------- Derived -------------------------------- */
+  const totalUnread = useMemo(
+    () =>
+      accounts.reduce((sum, acc) => {
+        if (acc.notificationsEnabled === false) return sum;
+        return sum + (profileAlerts[acc.id]?.unreadCount || 0);
+      }, 0),
+    [accounts, profileAlerts]
+  );
+
+  const incomingCalls = useMemo(
+    () =>
+      accounts
+        .filter((a) => a.notificationsEnabled !== false && profileAlerts[a.id]?.hasIncomingCall)
+        .map((a) => ({ account: a, alert: profileAlerts[a.id] })),
+    [accounts, profileAlerts]
+  );
+
+  const modalLeft = sidebarMode === "collapsed" ? 68 : 310;
+
+  const renderAvatar = (acc: AccountProfile, size: "card" | "preview") => {
+    const plat = getPlatform(acc.platformId);
+    const style = {
+      backgroundColor: acc.avatarDataUrl ? "transparent" : plat.color,
+    };
+    if (size === "preview") {
+      return (
+        <div className="bch-avatar-preview" style={style}>
+          {acc.avatarDataUrl ? (
+            <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
+          ) : (
+            plat.badge
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className="bch-acc-avatar" style={style}>
+        {acc.avatarDataUrl ? (
+          <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
+        ) : (
+          plat.badge
+        )}
+        <span
+          className="bch-acc-dot"
+          style={{ backgroundColor: selectedAccountId === acc.id ? "#10b981" : "#475569" }}
+        />
+      </div>
+    );
+  };
+
+  /* -------------------------------- Render -------------------------------- */
+  return (
+    <div className="bch-shell">
+      <aside className={`bch-sidebar ${sidebarMode === "collapsed" ? "mode-collapsed" : ""}`}>
+        {sidebarMode === "collapsed" ? (
+          <>
+            <div className="bch-collapsed-top">
+              <button
+                type="button"
+                className="bch-hamburger-btn"
+                onClick={() => setSidebarMode("full")}
+                title="Mở rộng danh sách tài khoản"
+              >
+                <span className="bch-hamburger-line" />
+                <span className="bch-hamburger-line" />
+                <span className="bch-hamburger-line" />
+              </button>
+              <button
+                type="button"
+                className="bch-collapsed-add-btn"
+                onClick={() => openAddAccount()}
+                title="＋ Thêm tài khoản mới"
+              >
+                ＋
+              </button>
+            </div>
+
+            <div className="bch-collapsed-icons-list">
+              {filteredAccounts.map((acc) => {
+                const plat = getPlatform(acc.platformId);
+                const isSelected = selectedAccount?.id === acc.id;
+                const notifyOn = acc.notificationsEnabled !== false;
+                const alertState = profileAlerts[acc.id];
+                const hasCall = notifyOn && Boolean(alertState?.hasIncomingCall);
+                const unreadCnt = notifyOn ? alertState?.unreadCount || 0 : 0;
+                return (
+                  <div
+                    key={acc.id}
+                    className="bch-collapsed-profile-item"
+                    title={`${acc.name} (${plat.name})${
+                      hasCall ? `\n📞 Đang có cuộc gọi đến: ${alertState?.caller || ""}` : ""
+                    }${unreadCnt > 0 ? `\n🔔 ${unreadCnt} tin chưa đọc` : ""}\nChuột trái: mở • Chuột phải: sửa`}
+                    onClick={() => selectAccount(acc)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      openEditAccount(acc);
+                    }}
+                  >
+                    {isSelected && <span className="bch-collapsed-active-pill" />}
+                    <button
+                      type="button"
+                      className={`bch-collapsed-avatar-btn ${isSelected ? "active" : ""} ${
+                        hasCall ? "incoming-call" : ""
+                      }`}
+                      style={{ backgroundColor: acc.avatarDataUrl ? "transparent" : plat.color }}
+                    >
+                      {acc.avatarDataUrl ? (
+                        <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
+                      ) : (
+                        plat.badge
+                      )}
+                      {hasCall ? (
+                        <span className="bch-collapsed-call-badge" title="Cuộc gọi đến">
+                          📞
+                        </span>
+                      ) : !notifyOn ? (
+                        <span className="bch-collapsed-muted-badge" title="Đã tắt thông báo">
+                          🔕
+                        </span>
+                      ) : unreadCnt > 0 ? (
+                        <span className="bch-collapsed-unread-badge">
+                          {unreadCnt > 99 ? "99+" : unreadCnt}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="bch-collapsed-footer">
+              <button
+                type="button"
+                className="bch-collapsed-tool-btn"
+                onClick={openNotificationCenter}
+                title={`Trung tâm thông báo (${notifications.length})`}
+              >
+                🔔
+              </button>
+              <button
+                type="button"
+                className="bch-collapsed-tool-btn"
+                onClick={() => {
+                  closeAllModals();
+                  setShowSettings(true);
+                }}
+                title="Cài đặt"
+              >
+                ⚙️
+              </button>
+              <button
+                type="button"
+                className="bch-collapsed-tool-btn danger"
+                onClick={exitApp}
+                title="Thoát ứng dụng"
+              >
+                ⏻
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="bch-brand-header">
+              <div className="bch-brand-info">
+                <button
+                  type="button"
+                  className="bch-hamburger-btn"
+                  onClick={() => setSidebarMode("collapsed")}
+                  title="Thu gọn danh sách (chỉ hiện icon)"
+                >
+                  <span className="bch-hamburger-line" />
+                  <span className="bch-hamburger-line" />
+                  <span className="bch-hamburger-line" />
+                </button>
+                <img src={logoUrl} alt="Henry Chat Pro" className="bch-brand-logo" />
+                <div className="bch-brand-text">
+                  <h1 className="bch-brand-title">
+                    <span className="bch-brand-name">Henry Chat Pro</span>
+                    {totalUnread > 0 && (
+                      <span
+                        className="bch-total-unread-pill"
+                        title={`Tổng ${totalUnread} tin chưa đọc`}
+                      >
+                        {totalUnread > 99 ? "99+" : totalUnread}
+                      </span>
+                    )}
+                  </h1>
+                  <div className="bch-brand-sub">
+                    {incomingCalls.length > 0
+                      ? `📞 ${incomingCalls.length} cuộc gọi đến`
+                      : `${accounts.length} tài khoản • ${platforms.length} nền tảng`}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="bch-brand-bell-btn"
+                title={`Trung tâm thông báo (${notifications.length})`}
+                aria-label="Trung tâm thông báo"
+                onClick={openNotificationCenter}
+              >
+                🔔
+                {notifications.length > 0 && (
+                  <span className="bch-brand-bell-count">
+                    {notifications.length > 99 ? "99+" : notifications.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                className="bch-brand-add-btn"
+                title="Thêm tài khoản mới"
+                aria-label="Thêm tài khoản mới"
+                onClick={() => openAddAccount()}
+              >
+                +
+              </button>
+            </div>
+
+            {(incomingCalls.length > 0 || alertToasts.length > 0) && (
+              <div className="bch-notify-panel">
+                {incomingCalls.map(({ account, alert }) => (
+                  <div className="bch-call-banner" key={`call_${account.id}`}>
+                    <div className="bch-call-banner-top">
+                      <span className="bch-call-pulse-dot" />
+                      <strong style={{ fontSize: 11.5, color: "#a7f3d0" }}>
+                        {alert?.callKind === "video" ? "📹 Cuộc gọi video đến" : "📞 Cuộc gọi đến"}
+                      </strong>
+                    </div>
+                    <div className="bch-toast-body">
+                      {alert?.caller || "Không rõ người gọi"} • {account.name}
+                    </div>
+                    <button
+                      type="button"
+                      className="bch-btn bch-btn-success"
+                      style={{ padding: "4px 8px", fontSize: 11 }}
+                      onClick={() => selectAccount(account)}
+                    >
+                      Mở tài khoản
+                    </button>
+                  </div>
+                ))}
+
+                {alertToasts.map((toast) => (
+                  <div
+                    className="bch-toast-row"
+                    key={toast.id}
+                    onClick={() => {
+                      const acc = accounts.find((a) => a.id === toast.profileId);
+                      if (acc) selectAccount(acc);
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div className="bch-toast-head">
+                        <span>
+                          {toast.isCall ? "📞" : "💬"} {toast.profileName}
+                        </span>
+                        <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+                          {toast.platformName}
+                        </span>
+                      </div>
+                      <div className="bch-toast-body">
+                        <strong style={{ color: "#e2e8f0" }}>{toast.title}</strong>
+                        {toast.body ? ` — ${toast.body}` : ""}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="bch-toast-close"
+                      title="Bỏ qua"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAlertToasts((prev) => prev.filter((t) => t.id !== toast.id));
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="bch-plat-section">
+              <div className="bch-section-top">
+                <span className="bch-section-label">
+                  Nền tảng / Trang web ({platforms.length})
+                </span>
+                <button
+                  type="button"
+                  className="bch-link-btn"
+                  onClick={() => {
+                    closeAllModals();
+                    setShowAddPlatform(true);
+                  }}
+                >
+                  + Thêm trang web
+                </button>
+              </div>
+
+              <div className="bch-plat-chips">
+                <button
+                  type="button"
+                  className={`bch-chip ${selectedPlatformFilter === "all" ? "active" : ""}`}
+                  onClick={() => setSelectedPlatformFilter("all")}
+                >
+                  Tất cả ({accounts.length})
+                </button>
+                {platforms.map((plat) => (
+                  <button
+                    type="button"
+                    key={plat.id}
+                    className={`bch-chip ${selectedPlatformFilter === plat.id ? "active" : ""}`}
+                    onClick={() => setSelectedPlatformFilter(plat.id)}
+                    title={`${plat.name} — ${plat.url}`}
+                  >
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 999,
+                        backgroundColor: plat.color,
+                        display: "inline-block",
+                      }}
+                    />
+                    {plat.name} ({accounts.filter((a) => a.platformId === plat.id).length})
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="bch-accounts-container">
+              {filteredAccounts.length === 0 && (
+                <div className="bch-alert-box bch-alert-info">
+                  Chưa có tài khoản nào trong mục này. Bấm <strong>＋ Tài khoản</strong> để thêm.
+                </div>
+              )}
+
+              {filteredAccounts.map((acc, index) => {
+                const plat = getPlatform(acc.platformId);
+                const isSelected = selectedAccount?.id === acc.id;
+                const notifyOn = acc.notificationsEnabled !== false;
+                const alertState = profileAlerts[acc.id];
+                const hasCall = notifyOn && Boolean(alertState?.hasIncomingCall);
+                const unreadCnt = notifyOn ? alertState?.unreadCount || 0 : 0;
+                const snippet = alertState?.lastBody || alertState?.lastTitle;
+                const shortcutHint = index < 9 ? `\nCtrl+${index + 1}: mở nhanh` : "";
+
+                return (
+                  <div
+                    className={`bch-acc-card ${isSelected ? "active" : ""} ${
+                      hasCall ? "incoming-call" : ""
+                    }`}
+                    key={acc.id}
+                  >
+                    <div
+                      className="bch-acc-header"
+                      onClick={() => selectAccount(acc)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        openEditAccount(acc);
+                      }}
+                      title={`${acc.name} • ${plat.name}\nChuột trái: mở khung chat\nChuột phải: chỉnh sửa${shortcutHint}`}
+                    >
+                      {renderAvatar(acc, "card")}
+                      <div className="bch-acc-meta">
+                        <div className="bch-acc-name">
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {acc.pinned ? "📌 " : ""}
+                            {acc.name}
+                          </span>
+                          {hasCall ? (
+                            <span className="bch-badge-call">📞</span>
+                          ) : !notifyOn ? (
+                            <span className="bch-badge-muted">🔕</span>
+                          ) : unreadCnt > 0 ? (
+                            <span className="bch-badge-unread">
+                              {unreadCnt > 99 ? "99+" : unreadCnt}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="bch-acc-sub">
+                          {plat.name}
+                          {hasCall
+                            ? ` • 📞 ${alertState?.caller || "đang gọi"}`
+                            : unreadCnt > 0
+                            ? ` • ${unreadCnt} tin chưa đọc`
+                            : isSelected
+                            ? " • Đang mở"
+                            : ""}
+                        </div>
+                      </div>
+                    </div>
+
+                    {snippet && (
+                      <div
+                        className="bch-acc-alert-snippet"
+                        onClick={() => selectAccount(acc)}
+                        title={snippet}
+                      >
+                        {alertState?.lastTitle ? `${alertState.lastTitle} — ` : ""}
+                        {snippet}
+                      </div>
+                    )}
+
+                    <div className="bch-acc-actions">
+                      <button
+                        type="button"
+                        className={`bch-action-btn ${acc.pinned ? "pinned" : ""}`}
+                        onClick={() => togglePin(acc)}
+                        title="Ghim tài khoản lên đầu danh sách"
+                      >
+                        {acc.pinned ? "📍 Bỏ ghim" : "📌 Ghim"}
+                      </button>
+                      <button
+                        type="button"
+                        className={`bch-action-btn ${notifyOn ? "notify-on" : "notify-off"}`}
+                        onClick={() => toggleNotifications(acc)}
+                        title="Bật/tắt thông báo & cảnh báo cuộc gọi"
+                      >
+                        {notifyOn ? "🔔 Thông báo" : "🔕 Đã tắt"}
+                      </button>
+                      <button
+                        type="button"
+                        className="bch-action-btn"
+                        onClick={() => reloadAccount(acc)}
+                        title="Tải lại trang trong khung chat"
+                      >
+                        ↻ Tải lại
+                      </button>
+                      <button
+                        type="button"
+                        className="bch-action-btn"
+                        onClick={() => openEditAccount(acc)}
+                        title="Đổi tên, ảnh đại diện, URL riêng"
+                      >
+                        ✎ Sửa
+                      </button>
+                      <button
+                        type="button"
+                        className="bch-action-btn"
+                        onClick={() => openInBrowser(acc)}
+                        title="Mở website bằng trình duyệt hệ thống"
+                      >
+                        🌐 Mở web
+                      </button>
+                      <button
+                        type="button"
+                        className="bch-action-btn danger"
+                        onClick={() => {
+                          closeAllModals();
+                          setDeleteTarget(acc);
+                        }}
+                        title="Xóa tài khoản và dữ liệu đăng nhập"
+                      >
+                        🗑 Xóa
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="bch-sidebar-footer">
+              <div className="bch-status-banner">{statusMessage}</div>
+              <div className="bch-footer-row">
+                <button
+                  type="button"
+                  className="bch-btn"
+                  onClick={() => {
+                    closeAllModals();
+                    setShowAddPlatform(true);
+                  }}
+                >
+                  ＋ Trang web
+                </button>
+                <button
+                  type="button"
+                  className="bch-btn"
+                  onClick={() => {
+                    closeAllModals();
+                    setShowSettings(true);
+                  }}
+                >
+                  ⚙ Cài đặt
+                </button>
+              </div>
+              <button type="button" className="bch-btn bch-btn-danger" onClick={exitApp}>
+                ⏻ Thoát ứng dụng
+              </button>
+            </div>
+          </>
+        )}
+      </aside>
+
+      <main className="bch-chat-viewport">
+        {!selectedAccount ? (
+          <div className="bch-stage-card">
+            <div style={{ fontSize: 34, marginBottom: 8 }}>🗂️</div>
+            <h2 style={{ margin: "0 0 8px", fontSize: 17, color: "#f8fafc" }}>
+              Workspace đa tài khoản
+            </h2>
+            <p style={{ margin: "0 0 14px", fontSize: 12.5, color: "#94a3b8", lineHeight: 1.6 }}>
+              Mỗi tài khoản chạy trong một phiên WebView riêng, giữ đăng nhập độc lập.
+              {accounts.length === 0
+                ? " Hãy thêm tài khoản đầu tiên để bắt đầu."
+                : " Chọn một tài khoản ở cột bên trái để mở khung chat."}
+            </p>
+            <button
+              type="button"
+              className="bch-btn bch-btn-primary"
+              onClick={() => openAddAccount()}
+            >
+              ＋ Thêm tài khoản
+            </button>
+          </div>
+        ) : (
+          <div style={{ fontSize: 11.5, color: "#334155", textAlign: "center" }}>
+            Khung chat của “{selectedAccount.name}” đang chạy trong cửa sổ WebView2 phía trên.
+            <br />
+            {TAURI_READY
+              ? "Nếu khung chat không hiện, hãy bấm ↻ Tải lại hoặc chọn lại tài khoản."
+              : "Bản xem trước trên trình duyệt không mở được WebView2."}
+          </div>
+        )}
+      </main>
+
+      {/* ------------------------------ MODALS ------------------------------ */}
+      {showAddAccount && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowAddAccount(false);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 520 }}>
+            <div className="bch-modal-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Thêm tài khoản</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                  Tài khoản mới có cookie &amp; localStorage riêng, không ảnh hưởng tài khoản khác.
+                </p>
+              </div>
+              <button type="button" className="bch-toast-close" onClick={() => setShowAddAccount(false)}>
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={createAccount}>
+              <div className="bch-form-group">
+                <label className="bch-label">Tên tài khoản</label>
+                <input
+                  className="bch-input"
+                  value={newAccName}
+                  onChange={(e) => setNewAccName(e.target.value)}
+                  placeholder="Ví dụ: Zalo Công Ty, Facebook Cá Nhân..."
+                  autoFocus
+                />
+              </div>
+
+              <div className="bch-form-group">
+                <label className="bch-label">Nền tảng</label>
+                <select
+                  className="bch-select"
+                  value={newAccPlatformId}
+                  onChange={(e) => setNewAccPlatformId(e.target.value)}
+                >
+                  {platforms.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                  <option value={CUSTOM_URL_OPTION_VALUE}>— URL tùy chỉnh —</option>
+                </select>
+              </div>
+
+              <div className="bch-form-group">
+                <label className="bch-label">
+                  URL riêng {newAccPlatformId === CUSTOM_URL_OPTION_VALUE ? "" : "(không bắt buộc)"}
+                </label>
+                <input
+                  className="bch-input"
+                  value={newAccCustomUrl}
+                  onChange={(e) => setNewAccCustomUrl(e.target.value)}
+                  placeholder={
+                    newAccPlatformId === CUSTOM_URL_OPTION_VALUE
+                      ? "https://example.com"
+                      : getPlatform(newAccPlatformId).url
+                  }
+                />
+              </div>
+
+              <div className="bch-form-group">
+                <label className="bch-label">Ảnh đại diện</label>
+                <div className="bch-avatar-picker">
+                  {renderAvatar(
+                    {
+                      id: "preview",
+                      name: newAccName || "?",
+                      platformId: newAccPlatformId,
+                      avatarDataUrl: newAccAvatar,
+                      createdAt: 0,
+                    },
+                    "preview"
+                  )}
+                  <div style={{ flex: 1 }}>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) =>
+                        handleAvatarPick(e, (dataUrl) => setNewAccAvatar(dataUrl))
+                      }
+                      style={{ fontSize: 11, color: "#94a3b8" }}
+                    />
+                    {newAccAvatar && (
+                      <button
+                        type="button"
+                        className="bch-link-btn"
+                        onClick={() => setNewAccAvatar(undefined)}
+                      >
+                        Bỏ ảnh
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12.5,
+                  color: "#cbd5e1",
+                  marginBottom: 14,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={newAccNotify}
+                  onChange={(e) => setNewAccNotify(e.target.checked)}
+                />
+                Bật thông báo &amp; cảnh báo cuộc gọi cho tài khoản này
+              </label>
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button type="button" className="bch-btn" onClick={() => setShowAddAccount(false)}>
+                  Hủy
+                </button>
+                <button type="submit" className="bch-btn bch-btn-primary">
+                  Thêm &amp; mở tài khoản
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showEditAccount && editingAccount && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowEditAccount(false);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 520 }}>
+            <div className="bch-modal-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Chỉnh sửa tài khoản</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                  {getPlatform(editingAccount.platformId).name} • mã profile: {editingAccount.id}
+                </p>
+              </div>
+              <button type="button" className="bch-toast-close" onClick={() => setShowEditAccount(false)}>
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={saveEditAccount}>
+              <div className="bch-tabs">
+                <button
+                  type="button"
+                  className={`bch-tab ${editTab === "general" ? "is-active" : ""}`}
+                  onClick={() => setEditTab("general")}
+                >
+                  Chung
+                </button>
+                <button
+                  type="button"
+                  className={`bch-tab ${editTab === "network" ? "is-active" : ""}`}
+                  onClick={() => setEditTab("network")}
+                >
+                  Mạng &amp; Proxy{normalizeProxy(editProxy).enabled ? " 🌐" : ""}
+                </button>
+              </div>
+
+              {editTab === "general" && (
+                <>
+                  <div className="bch-form-group">
+                    <label className="bch-label">Tên tài khoản</label>
+                    <input
+                      className="bch-input"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="bch-form-group">
+                    <label className="bch-label">
+                      URL riêng (để trống sẽ dùng URL của nền tảng)
+                    </label>
+                    <input
+                      className="bch-input"
+                      value={editCustomUrl}
+                      onChange={(e) => setEditCustomUrl(e.target.value)}
+                      placeholder={getPlatform(editingAccount.platformId).url}
+                    />
+                  </div>
+
+                  <div className="bch-form-group">
+                    <label className="bch-label">Ảnh đại diện</label>
+                    <div className="bch-avatar-picker">
+                      {renderAvatar(
+                        { ...editingAccount, name: editName, avatarDataUrl: editAvatar },
+                        "preview"
+                      )}
+                      <div style={{ flex: 1 }}>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleAvatarPick(e, (dataUrl) => setEditAvatar(dataUrl))}
+                          style={{ fontSize: 11, color: "#94a3b8" }}
+                        />
+                        {editAvatar && (
+                          <button
+                            type="button"
+                            className="bch-link-btn"
+                            onClick={() => setEditAvatar(undefined)}
+                          >
+                            Bỏ ảnh
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {editTab === "network" && (
+                <div className="bch-net-panel">
+                  <label className="bch-check-row">
+                    <input
+                      type="checkbox"
+                      checked={editProxy.enabled}
+                      onChange={(e) =>
+                        setEditProxy((p) => ({ ...p, enabled: e.target.checked }))
+                      }
+                    />
+                    Dùng proxy riêng cho tài khoản này
+                  </label>
+
+                  <div className="bch-net-grid">
+                    <select
+                      className="bch-select"
+                      value={editProxy.kind}
+                      onChange={(e) =>
+                        setEditProxy((p) => ({
+                          ...p,
+                          kind: e.target.value === "socks5" ? "socks5" : "http",
+                        }))
+                      }
+                    >
+                      <option value="http">HTTP</option>
+                      <option value="socks5">SOCKS5</option>
+                    </select>
+                    <input
+                      className="bch-input"
+                      placeholder="proxy.example.com"
+                      value={editProxy.host}
+                      onChange={(e) => setEditProxy((p) => ({ ...p, host: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <input
+                      className="bch-input"
+                      inputMode="numeric"
+                      placeholder="8080"
+                      value={editProxy.port || ""}
+                      onChange={(e) =>
+                        setEditProxy((p) => ({
+                          ...p,
+                          port: Number(e.target.value.replace(/\D+/g, "")) || 0,
+                        }))
+                      }
+                    />
+                  </div>
+
+                  <div className="bch-net-grid-2">
+                    <input
+                      className="bch-input"
+                      placeholder="Tên đăng nhập proxy (nếu có)"
+                      value={editProxy.username}
+                      onChange={(e) => setEditProxy((p) => ({ ...p, username: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <input
+                      className="bch-input"
+                      type="password"
+                      placeholder="Mật khẩu proxy"
+                      value={editProxy.password}
+                      onChange={(e) => setEditProxy((p) => ({ ...p, password: e.target.value }))}
+                      autoComplete="new-password"
+                    />
+                  </div>
+
+                  <input
+                    className="bch-input"
+                    placeholder="Bỏ qua proxy cho: *.local,192.168.* (không bắt buộc)"
+                    value={editProxy.bypass}
+                    onChange={(e) => setEditProxy((p) => ({ ...p, bypass: e.target.value }))}
+                    spellCheck={false}
+                  />
+
+                  <div className="bch-net-actions">
+                    <button
+                      type="button"
+                      className="bch-btn"
+                      onClick={testProfileProxy}
+                      disabled={proxyTesting}
+                    >
+                      {proxyTesting ? "⏳ Đang kiểm tra…" : "🧪 Kiểm tra proxy"}
+                    </button>
+                    <button type="button" className="bch-btn" onClick={pingBridge}>
+                      🔌 Kiểm tra bridge
+                    </button>
+                  </div>
+
+                  {proxyResult && (
+                    <p
+                      className={`bch-net-result ${proxyResult.ok ? "is-ok" : "is-err"}`}
+                    >
+                      {proxyResult.ok ? "✅" : "⛔"} {proxyResult.message}
+                      {proxyResult.via && (
+                        <span className="bch-net-meta">
+                          {proxyResult.via} • {proxyResult.latency_ms} ms
+                        </span>
+                      )}
+                    </p>
+                  )}
+                  {bridgeStatus && <p className="bch-net-result">{bridgeStatus}</p>}
+
+                  <p className="bch-hint">
+                    Proxy được áp dụng lúc khung chat khởi tạo, nên bấm “Lưu thay đổi” app
+                    sẽ tự đóng và mở lại tài khoản này. IP thật được chặn rò rỉ qua
+                    WebRTC/UDP và QUIC. Proxy có mật khẩu được chuyển tiếp qua relay nội bộ
+                    127.0.0.1 — mật khẩu không lộ ra command line.
+                  </p>
+                </div>
+              )}
+
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12.5,
+                  color: "#cbd5e1",
+                  marginBottom: 14,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={editNotify}
+                  onChange={(e) => setEditNotify(e.target.checked)}
+                />
+                Bật thông báo &amp; cảnh báo cuộc gọi
+              </label>
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
+                <button
+                  type="button"
+                  className="bch-btn bch-btn-danger"
+                  onClick={() => {
+                    setShowEditAccount(false);
+                    setDeleteTarget(editingAccount);
+                  }}
+                >
+                  🗑 Xóa tài khoản
+                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="button" className="bch-btn" onClick={() => setShowEditAccount(false)}>
+                    Hủy
+                  </button>
+                  <button type="submit" className="bch-btn bch-btn-primary">
+                    Lưu thay đổi
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showAddPlatform && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowAddPlatform(false);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 520 }}>
+            <div className="bch-modal-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Thêm nền tảng / trang web</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                  Bất kỳ website nào cho phép đăng nhập trên trình duyệt.
+                </p>
+              </div>
+              <button type="button" className="bch-toast-close" onClick={() => setShowAddPlatform(false)}>
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={createPlatform}>
+              <div className="bch-form-group">
+                <label className="bch-label">Tên nền tảng</label>
+                <input
+                  className="bch-input"
+                  value={newPlatName}
+                  onChange={(e) => setNewPlatName(e.target.value)}
+                  placeholder="Ví dụ: Facebook, Discord, Shopee..."
+                  autoFocus
+                />
+              </div>
+              <div className="bch-form-group">
+                <label className="bch-label">Địa chỉ website</label>
+                <input
+                  className="bch-input"
+                  value={newPlatUrl}
+                  onChange={(e) => setNewPlatUrl(e.target.value)}
+                  placeholder="https://example.com"
+                />
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <div className="bch-form-group" style={{ flex: 1 }}>
+                  <label className="bch-label">Màu nhận diện</label>
+                  <input
+                    className="bch-input"
+                    type="color"
+                    value={newPlatColor}
+                    onChange={(e) => setNewPlatColor(e.target.value)}
+                    style={{ padding: 4, height: 36 }}
+                  />
+                </div>
+                <div className="bch-form-group" style={{ flex: 1 }}>
+                  <label className="bch-label">Nhãn (2–3 ký tự)</label>
+                  <input
+                    className="bch-input"
+                    value={newPlatBadge}
+                    onChange={(e) => setNewPlatBadge(e.target.value)}
+                    placeholder="FB"
+                    maxLength={3}
+                  />
+                </div>
+              </div>
+
+              {platforms.some((p) => !p.isBuiltIn) && (
+                <div className="bch-section-card">
+                  <div className="bch-section-label" style={{ marginBottom: 8 }}>
+                    Nền tảng tự thêm
+                  </div>
+                  {platforms
+                    .filter((p) => !p.isBuiltIn)
+                    .map((p) => (
+                      <div
+                        key={p.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          fontSize: 12,
+                          color: "#cbd5e1",
+                          padding: "4px 0",
+                        }}
+                      >
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <span
+                            style={{
+                              display: "inline-block",
+                              width: 8,
+                              height: 8,
+                              borderRadius: 999,
+                              backgroundColor: p.color,
+                              marginRight: 6,
+                            }}
+                          />
+                          {p.name} — {p.url}
+                        </span>
+                        <button
+                          type="button"
+                          className="bch-link-btn"
+                          onClick={() => deletePlatform(p)}
+                        >
+                          Xóa
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button type="button" className="bch-btn" onClick={() => setShowAddPlatform(false)}>
+                  Hủy
+                </button>
+                <button type="submit" className="bch-btn bch-btn-primary">
+                  Thêm nền tảng
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowSettings(false);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 560 }}>
+            <div className="bch-modal-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Cài đặt</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                  Henry Chat Pro v3.0.0 • {accounts.length} tài khoản • {platforms.length} nền tảng
+                </p>
+              </div>
+              <button type="button" className="bch-toast-close" onClick={() => setShowSettings(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="bch-section-card">
+              <div className="bch-section-label" style={{ marginBottom: 9 }}>
+                Giao diện
+              </div>
+              <div className="bch-footer-row" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                <button
+                  type="button"
+                  className={`bch-btn ${sidebarMode === "full" ? "bch-btn-primary" : ""}`}
+                  onClick={() => setSidebarMode("full")}
+                >
+                  Danh sách đầy đủ (310px)
+                </button>
+                <button
+                  type="button"
+                  className={`bch-btn ${sidebarMode === "collapsed" ? "bch-btn-primary" : ""}`}
+                  onClick={() => setSidebarMode("collapsed")}
+                >
+                  Chỉ icon (68px)
+                </button>
+              </div>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12.5,
+                  color: "#cbd5e1",
+                  marginTop: 12,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.alwaysOnTop}
+                  onChange={(e) =>
+                    setSettings((prev) => ({ ...prev, alwaysOnTop: e.target.checked }))
+                  }
+                />
+                Luôn hiển thị trên cùng (ghim cửa sổ)
+              </label>
+              <p style={{ margin: "10px 0 0", fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
+                ⌨️ Phím tắt: <strong>Ctrl + 1…9</strong> mở tài khoản theo thứ tự đang hiển thị •{" "}
+                <strong>Ctrl + Tab</strong> / <strong>Ctrl + Shift + Tab</strong> chuyển kế tiếp hoặc
+                quay lại.
+              </p>
+            </div>
+
+            <div className="bch-section-card">
+              <div className="bch-section-label" style={{ marginBottom: 9 }}>
+                Thông báo
+              </div>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12.5,
+                  color: "#cbd5e1",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.muteSound}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, muteSound: e.target.checked }))}
+                />
+                Tắt âm thanh thông báo của ứng dụng
+              </label>
+              <p style={{ margin: "8px 0 10px", fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5 }}>
+                Mỗi tài khoản có công tắc thông báo riêng (nút 🔔 trên thẻ tài khoản). Ứng dụng chỉ đọc
+                số tin chưa đọc và cuộc gọi đến — không lưu nội dung tin nhắn.
+              </p>
+              <button type="button" className="bch-btn bch-btn-success" onClick={enableAllNotifications}>
+                🔔 Bật thông báo cho tất cả tài khoản
+              </button>
+            </div>
+
+            <div className="bch-section-card">
+              <div className="bch-section-label" style={{ marginBottom: 9 }}>
+                Hiệu năng &amp; dữ liệu
+              </div>
+              <p style={{ margin: "0 0 10px", fontSize: 11.5, color: "#94a3b8", lineHeight: 1.5 }}>
+                Phiên đăng nhập của từng tài khoản nằm trong thư mục{" "}
+                <code>chat_profiles/&lt;nền tảng&gt;/&lt;mã tài khoản&gt;</code>.
+              </p>
+              <div className="bch-form-group">
+                <label className="bch-label">Số khung chat giữ chạy đồng thời</label>
+                <select
+                  className="bch-select"
+                  value={settings.maxLiveWebviews}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      maxLiveWebviews: Number(e.target.value),
+                    }))
+                  }
+                >
+                  <option value={1}>1 — tiết kiệm RAM tối đa</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3 — cân bằng (mặc định)</option>
+                  <option value={4}>4</option>
+                  <option value={5}>5</option>
+                  <option value={0}>Không giới hạn (tốn RAM nhất)</option>
+                </select>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "#94a3b8", lineHeight: 1.45 }}>
+                  Khi mở nhiều tài khoản hơn mức này, khung chat của tài khoản ít dùng nhất sẽ
+                  tự đóng để giải phóng RAM. Phiên đăng nhập vẫn được giữ trên ổ đĩa nên mở
+                  lại không phải đăng nhập lại; đổi lại, tài khoản đã đóng sẽ không báo tin
+                  nhắn mới cho tới khi bạn mở lại.
+                </p>
+              </div>
+              <div className="bch-footer-row">
+                <button
+                  type="button"
+                  className="bch-btn"
+                  onClick={async () => {
+                    const msg = await callTauri<string>("optimize_ram_now");
+                    flashStatus(msg || "Không chạy được tối ưu RAM");
+                  }}
+                >
+                  🧠 Giải phóng RAM
+                </button>
+                <button
+                  type="button"
+                  className="bch-btn"
+                  onClick={async () => {
+                    const dir = await callTauri<string>("open_app_data_folder");
+                    flashStatus(dir ? `📂 Đã mở ${dir}` : "Không mở được thư mục dữ liệu");
+                  }}
+                >
+                  📂 Mở thư mục dữ liệu
+                </button>
+              </div>
+            </div>
+
+            <div className="bch-alert-box bch-alert-info">
+              Đã loại bỏ toàn bộ tính năng sao lưu / bơm lịch sử Zalo vào web chat: mỗi tài khoản
+              hoạt động như một trình duyệt riêng, dữ liệu tin nhắn do chính website quản lý.
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <button type="button" className="bch-btn bch-btn-danger" onClick={exitApp}>
+                ⏻ Thoát ứng dụng
+              </button>
+              <button type="button" className="bch-btn bch-btn-primary" onClick={() => setShowSettings(false)}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showInbox && (
+        <div
+          className="bch-inbox-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowInbox(false);
+          }}
+        >
+          <div className="bch-inbox-card">
+            <div className="bch-inbox-head">
+              <div>
+                <h2 className="bch-inbox-heading">Trung tâm thông báo</h2>
+                <p className="bch-inbox-sub">
+                  {notifications.length} thông báo • tin mới được lấy từ tiêu đề khung chat của
+                  từng tài khoản
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {notifications.length > 0 && (
+                  <button
+                    type="button"
+                    className="bch-btn"
+                    onClick={() => setNotifications([])}
+                    title="Xoá toàn bộ danh sách thông báo"
+                  >
+                    🗑 Xoá hết
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="bch-toast-close"
+                  onClick={() => setShowInbox(false)}
+                  aria-label="Đóng"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="bch-inbox-list">
+              {notifications.length === 0 && (
+                <div className="bch-inbox-empty">
+                  Chưa có thông báo nào. Khi một tài khoản nhận tin nhắn mới (hoặc có cuộc gọi
+                  đến), thông báo sẽ xuất hiện ở đây để bạn đọc và trả lời ngay.
+                </div>
+              )}
+
+              {notifications.map((item) => {
+                const acc = accounts.find((a) => a.id === item.profileId);
+                const plat = acc ? getPlatform(acc.platformId) : null;
+                const replying = replyTargetId === item.id;
+                return (
+                  <div
+                    key={item.id}
+                    className={`bch-inbox-item ${item.isCall ? "is-call" : ""}`}
+                  >
+                    <div className="bch-inbox-item-top">
+                      <span
+                        className="bch-inbox-badge"
+                        style={{ backgroundColor: plat?.color || "#475569" }}
+                      >
+                        {plat?.badge || "?"}
+                      </span>
+                      <div className="bch-inbox-meta">
+                        <div className="bch-inbox-name">
+                          {acc?.name || item.profileId}
+                          {plat ? ` • ${plat.name}` : ""}
+                        </div>
+                        <div className="bch-inbox-time">
+                          {new Date(item.at).toLocaleString("vi-VN")}
+                          {item.unread > 0 ? ` • ${item.unread} tin chưa đọc` : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="bch-link-btn"
+                        onClick={() => {
+                          if (acc) selectAccount(acc);
+                        }}
+                      >
+                        Mở
+                      </button>
+                    </div>
+
+                    <div className="bch-inbox-title">{item.title}</div>
+                    {item.body && <div className="bch-inbox-body">{item.body}</div>}
+
+                    {replying ? (
+                      <div className="bch-inbox-reply">
+                        <textarea
+                          className="bch-input bch-inbox-textarea"
+                          rows={2}
+                          autoFocus
+                          value={replyText}
+                          placeholder={`Trả lời ${acc?.name || "tài khoản"}...`}
+                          onChange={(e) => setReplyText(e.target.value)}
+                        />
+                        <div className="bch-inbox-reply-actions">
+                          <button
+                            type="button"
+                            className="bch-btn bch-btn-primary"
+                            disabled={replySending || !replyText.trim()}
+                            onClick={() => void sendReply(item, true)}
+                          >
+                            {replySending ? "Đang gửi..." : "📤 Gửi"}
+                          </button>
+                          <button
+                            type="button"
+                            className="bch-btn"
+                            disabled={replySending || !replyText.trim()}
+                            onClick={() => void sendReply(item, false)}
+                            title="Chỉ điền vào ô chat để bạn xem lại trước khi gửi"
+                          >
+                            📝 Chỉ điền
+                          </button>
+                          <button
+                            type="button"
+                            className="bch-btn"
+                            onClick={() => {
+                              setReplyTargetId(null);
+                              setReplyText("");
+                            }}
+                          >
+                            Huỷ
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bch-inbox-actions">
+                        <button
+                          type="button"
+                          className="bch-btn"
+                          onClick={() => {
+                            setReplyTargetId(item.id);
+                            setReplyText("");
+                          }}
+                        >
+                          ↩ Trả lời
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeleteTarget(null);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 460 }}>
+            <div className="bch-modal-header">
+              <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Xóa tài khoản?</h2>
+              <button type="button" className="bch-toast-close" onClick={() => setDeleteTarget(null)}>
+                ✕
+              </button>
+            </div>
+            <div className="bch-alert-box bch-alert-warning">
+              Tài khoản <strong>{deleteTarget.name}</strong> sẽ bị xóa khỏi workspace và toàn bộ dữ
+              liệu đăng nhập (cookie, cache) của profile này trên ổ cứng sẽ bị xóa. Hành động không
+              thể hoàn tác.
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button type="button" className="bch-btn" onClick={() => setDeleteTarget(null)}>
+                Hủy
+              </button>
+              <button type="button" className="bch-btn bch-btn-danger" onClick={confirmDeleteAccount}>
+                🗑 Xóa vĩnh viễn
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
