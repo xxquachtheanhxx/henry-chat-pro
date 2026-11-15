@@ -1838,6 +1838,8 @@ export default function App() {
             className={`bch-rail-btn ${sidebarFilter.kind === "all" ? "active" : ""}`}
             title="Tất cả tài khoản"
             onClick={() => {
+              // Đóng mọi bảng đang mở để quay lại đúng khung chat
+              closeAllModals();
               setSidebarFilter({ kind: "all" });
               setSidebarMode("full");
             }}
@@ -1864,6 +1866,7 @@ export default function App() {
                     className={`bch-rail-btn bch-rail-group-btn ${active ? "active" : ""}`}
                     title={`Nhóm ${g.name} (${count})`}
                     onClick={() => {
+                      closeAllModals();
                       setSidebarFilter(active ? { kind: "all" } : { kind: "group", id: g.id });
                       setSidebarMode("full");
                     }}
