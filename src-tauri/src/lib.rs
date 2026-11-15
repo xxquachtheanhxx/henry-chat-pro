@@ -73,6 +73,8 @@ pub struct WorkspaceState {
     pub last_used: Mutex<HashMap<String, u64>>,
     /// Số WebView được giữ chạy đồng thời (0 = không giới hạn)
     pub max_live_webviews: Mutex<usize>,
+    pub minimize_to_tray: Mutex<bool>,
+    pub tray_profiles: Mutex<Vec<(String, String, String)>>, // (id, name, platform_name)
 }
 
 impl WorkspaceState {
@@ -89,6 +91,8 @@ impl WorkspaceState {
             profile_notify_enabled: Mutex::new(HashMap::new()),
             last_used: Mutex::new(HashMap::new()),
             max_live_webviews: Mutex::new(3),
+            minimize_to_tray: Mutex::new(true),
+            tray_profiles: Mutex::new(Vec::new()),
         }
     }
 
@@ -2291,6 +2295,125 @@ async fn confirm_and_exit_app(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+pub struct TrayProfileInput {
+    pub id: String,
+    pub name: String,
+    pub platform_name: String,
+}
+
+/// Cập nhật chế độ "thu xuống khay khi đóng".
+#[tauri::command]
+async fn set_minimize_to_tray(
+    state: State<'_, Arc<WorkspaceState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    if let Ok(mut g) = state.minimize_to_tray.lock() {
+        *g = enabled;
+    }
+    Ok(())
+}
+
+/// Cập nhật danh sách profile trong menu khay (gọi từ frontend khi accounts thay đổi).
+#[tauri::command]
+async fn update_tray_profiles(
+    app: AppHandle,
+    state: State<'_, Arc<WorkspaceState>>,
+    profiles: Vec<TrayProfileInput>,
+) -> Result<(), String> {
+    let list: Vec<(String, String, String)> =
+        profiles.into_iter().map(|p| (p.id, p.name, p.platform_name)).collect();
+    if let Ok(mut g) = state.tray_profiles.lock() {
+        *g = list;
+    }
+    rebuild_tray_menu(&app, &state);
+    Ok(())
+}
+
+/// Ẩn toàn bộ cửa sổ xuống khay (gọi khi bấm đóng và chế độ tray bật).
+#[tauri::command]
+async fn hide_to_tray(
+    app: AppHandle,
+    state: State<'_, Arc<WorkspaceState>>,
+) -> Result<(), String> {
+    hide_all_chat_windows_everywhere(&app, state.inner());
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    // Balloon thông báo (chỉ Windows) qua Shell_NotifyIcon
+    #[cfg(target_os = "windows")]
+    {
+        show_tray_balloon(&app, "Henry Chat Pro", "Ứng dụng đang chạy trong khay hệ thống.");
+    }
+    Ok(())
+}
+
+fn rebuild_tray_menu(app: &AppHandle, state: &Arc<WorkspaceState>) {
+    let tray = match app.tray_by_id("main-tray") {
+        Some(t) => t,
+        None => return,
+    };
+    let profiles = state.tray_profiles.lock().ok().map(|g| g.clone()).unwrap_or_default();
+
+    let mut menu = tauri::menu::MenuBuilder::new(app);
+    let open_item = tauri::menu::MenuItemBuilder::with_id("open", "Mở Henry Chat Pro").build(app);
+    if let Ok(i) = open_item { let _ = menu = menu.item(&i); }
+
+    // Submenu chọn tài khoản
+    if !profiles.is_empty() {
+        let mut sub = tauri::menu::SubmenuBuilder::new(app, "Chọn tài khoản");
+        for (id, name, plat) in profiles.iter() {
+            let label = format!("{} — {}", name, plat);
+            if let Ok(i) = tauri::menu::MenuItemBuilder::with_id(format!("profile:{}", id), label).build(app) {
+                let _ = sub = sub.item(&i);
+            }
+        }
+        if let Ok(s) = sub.build() {
+            let _ = menu = menu.item(&s);
+        }
+    }
+
+    if let Ok(i) = tauri::menu::MenuItemBuilder::with_id("notifications", "Trung tâm thông báo").build(app) {
+        let _ = menu = menu.item(&i);
+    }
+    if let Ok(sep) = tauri::menu::PredefinedMenuItem::separator(app) {
+        let _ = menu = menu.item(&sep);
+    }
+    if let Ok(i) = tauri::menu::MenuItemBuilder::with_id("quit", "Thoát").build(app) {
+        let _ = menu = menu.item(&i);
+    }
+
+    if let Ok(m) = menu.build() {
+        let _ = tray.set_menu(Some(m));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn show_tray_balloon(app: &AppHandle, title: &str, msg: &str) {
+    // Dùng Shell_NotifyIconW để hiện balloon. Đơn giản hoá: gọi qua windows crate.
+    use windows::Win32::UI::Shell::{Shell_NotifyIconW, NOTIFYICONDATAW, NIM_MODIFY, NIF_INFO};
+    use windows::Win32::Foundation::HWND;
+    // Cần hwnd của cửa sổ ẩn; dùng main window hwnd nếu có.
+    let hwnd = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize).unwrap_or(0);
+    let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = HWND(hwnd as _);
+    nid.uID = 1;
+    nid.uFlags = NIF_INFO;
+    // szInfoTitle / szInfo
+    let mut t: [u16; 64] = [0; 64];
+    for (i, c) in title.encode_utf16().take(63).enumerate() { t[i] = c; }
+    nid.szInfoTitle = t;
+    let mut m: [u16; 256] = [0; 256];
+    for (i, c) in msg.encode_utf16().take(255).enumerate() { m[i] = c; }
+    nid.szInfo = m;
+    use windows::Win32::UI::Shell::NIM_ADD;
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let workspace = Arc::new(WorkspaceState::new());
@@ -2303,6 +2426,54 @@ pub fn run() {
         .setup(move |app| {
             if let Ok(mut guard) = state_for_setup.app_handle.lock() {
                 *guard = Some(app.handle().clone());
+            }
+
+            // Tạo icon khay hệ thống
+            let tray_icon = app.default_window_icon().cloned();
+            let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("main-tray")
+                .tooltip("Henry Chat Pro");
+            if let Some(icon) = tray_icon {
+                tray_builder = tray_builder.icon(icon);
+            }
+            let state_for_tray = Arc::clone(&state_for_setup);
+            let app_for_tray = app.handle().clone();
+            let tray = tray_builder
+                .on_menu_event(move |app, event| {
+                    let id = event.id.as_ref();
+                    match id {
+                        "open" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "notifications" => {
+                            let _ = app.emit_to("main", "bch-open-notification-center", ());
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            if let Some(main) = app.get_webview_window("main") {
+                                let _ = main.hide();
+                            }
+                            app.exit(0);
+                        }
+                        other if other.starts_with("profile:") => {
+                            let pid = other.trim_start_matches("profile:");
+                            let _ = app.emit_to("main", "bch-tray-select-profile", pid.to_string());
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app);
+            if tray.is_ok() {
+                rebuild_tray_menu(&app_for_tray, &state_for_tray);
             }
 
             // Dọn WebView ít dùng định kỳ (phòng khi giới hạn bị hạ xuống hoặc app chạy lâu)
@@ -2346,16 +2517,35 @@ pub fn run() {
                     | WindowEvent::ScaleFactorChanged { .. } => {
                         sync_embedded_chat_bounds(window.app_handle(), &state_for_event);
                     }
-                    WindowEvent::CloseRequested { .. } => {
-                        // Ẩn mọi khung chat + cửa sổ chính NGAY khi bấm đóng.
-                        // Nếu để cửa sổ còn hiển thị trong lúc WebView2 teardown, Windows sẽ
-                        // vẽ lại vùng đó thành khung trắng vài giây (hiện tượng "cửa sổ trắng"
-                        // còn sót sau khi tắt ứng dụng).
-                        hide_all_chat_windows_everywhere(
-                            window.app_handle(),
-                            &state_for_event,
-                        );
-                        let _ = window.hide();
+                    WindowEvent::CloseRequested { api, .. } => {
+                        let minimize = state_for_event
+                            .minimize_to_tray
+                            .lock()
+                            .map(|g| *g)
+                            .unwrap_or(true);
+                        if minimize {
+                            // Thu xuống khay thay vì thoát
+                            api.prevent_close();
+                            hide_all_chat_windows_everywhere(
+                                window.app_handle(),
+                                &state_for_event,
+                            );
+                            let _ = window.hide();
+                            #[cfg(target_os = "windows")]
+                            {
+                                show_tray_balloon(
+                                    &window.app_handle(),
+                                    "Henry Chat Pro",
+                                    "Ứng dụng đang chạy trong khay hệ thống. Chuột phải vào icon khay để chọn profile.",
+                                );
+                            }
+                        } else {
+                            hide_all_chat_windows_everywhere(
+                                window.app_handle(),
+                                &state_for_event,
+                            );
+                            let _ = window.hide();
+                        }
                     }
                     _ => {}
                 }
@@ -2381,6 +2571,9 @@ pub fn run() {
             send_chat_message,
             test_profile_proxy,
             bch_bridge_ping,
+            set_minimize_to_tray,
+            update_tray_profiles,
+            hide_to_tray,
             save_workspace_snapshot,
             load_workspace_snapshot,
             open_system_browser,

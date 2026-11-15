@@ -110,6 +110,8 @@ export interface AlertToastItem {
 export interface WorkspaceSettings {
   muteSound: boolean;
   alwaysOnTop: boolean;
+  /** Thu xuống khay hệ thống khi bấm đóng thay vì thoát */
+  minimizeToTray: boolean;
   /** Số WebView giữ chạy đồng thời (0 = không giới hạn) */
   maxLiveWebviews: number;
 }
@@ -437,6 +439,8 @@ export default function App() {
     return {
       muteSound: !!saved.muteSound,
       alwaysOnTop: !!saved.alwaysOnTop,
+      minimizeToTray:
+        typeof saved.minimizeToTray === "boolean" ? saved.minimizeToTray : true,
       maxLiveWebviews:
         typeof saved.maxLiveWebviews === "number" ? saved.maxLiveWebviews : 3,
     };
@@ -573,6 +577,7 @@ export default function App() {
 
   useEffect(() => {
     saveJson(LS_SETTINGS, settings);
+    void callTauri("set_minimize_to_tray", { enabled: settings.minimizeToTray });
   }, [settings]);
 
   useEffect(() => {
@@ -582,6 +587,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(LS_SELECTED, selectedAccountId);
   }, [selectedAccountId]);
+
+  // Đồng bộ danh sách profile sang menu khay hệ thống
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    void callTauri("update_tray_profiles", {
+      profiles: accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        platformName: getPlatform(a.platformId).name,
+      })),
+    });
+  }, [accounts, platforms]);
 
   // Cửa sổ chính được tạo ở trạng thái ẩn: hiện nó sau khi React đã vẽ xong khung chat
   // (tránh khung trắng của WebView2 khi khởi động).
@@ -903,6 +920,36 @@ export default function App() {
       if (unlisten) unlisten();
     };
   }, []);
+
+  // Sự kiện từ khay hệ thống
+  useEffect(() => {
+    if (!TAURI_READY) return;
+    let unlistenSelect: (() => void) | undefined;
+    let unlistenNotif: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<string>("bch-tray-select-profile", (event) => {
+      const pid = event.payload;
+      const acc = accounts.find((a) => a.id === pid);
+      if (acc) selectAccount(acc);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenSelect = fn;
+    }).catch(() => {});
+
+    listen<void>("bch-open-notification-center", () => {
+      openNotificationCenter();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenNotif = fn;
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (unlistenSelect) unlistenSelect();
+      if (unlistenNotif) unlistenNotif();
+    };
+  }, [accounts]);
 
   /* --------------------------- Bridge v2 (pane → app) --------------------- */
   useEffect(() => {
@@ -2688,6 +2735,25 @@ export default function App() {
                   }
                 />
                 Luôn hiển thị trên cùng (ghim cửa sổ)
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 12.5,
+                  color: "#cbd5e1",
+                  marginTop: 8,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.minimizeToTray}
+                  onChange={(e) =>
+                    setSettings((prev) => ({ ...prev, minimizeToTray: e.target.checked }))
+                  }
+                />
+                Thu xuống khay hệ thống khi bấm đóng (thoát thật qua menu khay)
               </label>
               <p style={{ margin: "10px 0 0", fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
                 ⌨️ Phím tắt: <strong>Ctrl + 1…9</strong> mở tài khoản theo thứ tự đang hiển thị •{" "}
