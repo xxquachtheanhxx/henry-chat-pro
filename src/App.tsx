@@ -1829,9 +1829,16 @@ export default function App() {
   return (
     <div className={`bch-shell ${IS_NOTIF_WINDOW ? "bch-notif-window" : ""}`}>
       <nav className="bch-rail" aria-label="Điều hướng chính">
-        <div className="bch-rail-brand" title="Henry Chat Pro">
-          <img src={logoUrl} alt="Henry Chat Pro" />
-        </div>
+        <button
+          type="button"
+          className="bch-rail-brand bch-rail-brand-btn"
+          title={sidebarMode === "collapsed" ? "Mở rộng danh sách" : "Thu gọn danh sách (chỉ hiện icon)"}
+          onClick={() => setSidebarMode(sidebarMode === "collapsed" ? "full" : "collapsed")}
+        >
+          <span className="bch-hamburger-line" />
+          <span className="bch-hamburger-line" />
+          <span className="bch-hamburger-line" />
+        </button>
         <div className="bch-rail-group">
           <button
             type="button"
@@ -1845,14 +1852,6 @@ export default function App() {
             }}
           >
             💬
-          </button>
-          <button
-            type="button"
-            className="bch-rail-btn bch-rail-add"
-            title="Tạo profile mới"
-            onClick={() => openAddAccount()}
-          >
-            ＋
           </button>
           {groups.length > 0 && (
             <div className="bch-rail-groups">
@@ -1925,6 +1924,14 @@ export default function App() {
         <div className="bch-rail-bottom">
           <button
             type="button"
+            className="bch-rail-btn bch-rail-add"
+            title="Tạo profile mới"
+            onClick={() => openAddAccount()}
+          >
+            ＋
+          </button>
+          <button
+            type="button"
             className="bch-rail-btn"
             title={`Giao diện: ${settings.theme === "light" ? "Sáng" : settings.theme === "dark" ? "Tối" : "Theo hệ thống"}`}
             onClick={() =>
@@ -1961,68 +1968,6 @@ export default function App() {
       <aside className={`bch-sidebar ${sidebarMode === "collapsed" ? "mode-collapsed" : ""}`}>
         {sidebarMode === "collapsed" ? (
           <>
-            <div className="bch-collapsed-top">
-              <button
-                type="button"
-                className="bch-hamburger-btn"
-                onClick={() => setSidebarMode("full")}
-                title="Mở rộng danh sách tài khoản"
-              >
-                <span className="bch-hamburger-line" />
-                <span className="bch-hamburger-line" />
-                <span className="bch-hamburger-line" />
-              </button>
-              <button
-                type="button"
-                className="bch-collapsed-add-btn"
-                onClick={() => openAddAccount()}
-                title="＋ Thêm tài khoản mới"
-              >
-                ＋
-              </button>
-            </div>
-
-            <div style={{ padding: "4px 8px" }}>
-              <select
-                className="bch-select"
-                style={{ width: "100%", fontSize: 11, padding: "4px 6px" }}
-                value={
-                  sidebarFilter.kind === "all"
-                    ? "all"
-                    : sidebarFilter.kind === "platform"
-                    ? `p:${sidebarFilter.id}`
-                    : `g:${sidebarFilter.id}`
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === "all") setSidebarFilter({ kind: "all" });
-                  else if (v.startsWith("p:"))
-                    setSidebarFilter({ kind: "platform", id: v.slice(2) });
-                  else if (v.startsWith("g:"))
-                    setSidebarFilter({ kind: "group", id: v.slice(2) });
-                }}
-                title="Chọn nhóm / nền tảng để lọc"
-              >
-                <option value="all">Tất cả</option>
-                <optgroup label="Nền tảng">
-                  {platforms.map((p) => (
-                    <option key={p.id} value={`p:${p.id}`}>
-                      {p.name}
-                    </option>
-                  ))}
-                </optgroup>
-                {groups.length > 0 && (
-                  <optgroup label="Nhóm của bạn">
-                    {groups.map((g) => (
-                      <option key={g.id} value={`g:${g.id}`}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-
             <div className="bch-collapsed-icons-list">
               {filteredAccounts.map((acc) => {
                 const plat = getPlatform(acc.platformId);
@@ -2101,61 +2046,12 @@ export default function App() {
               })}
             </div>
 
-            <div className="bch-collapsed-footer">
-              <button
-                type="button"
-                className="bch-collapsed-tool-btn"
-                onClick={() => {
-                  closeAllModals();
-                  setShowLan(true);
-                }}
-                title="Gửi file / máy khác (LAN)"
-              >
-                📡
-              </button>
-              <button
-                type="button"
-                className="bch-collapsed-tool-btn"
-                onClick={openNotificationCenter}
-                title={`Trung tâm thông báo (${notifications.length})`}
-              >
-                🔔
-              </button>
-              <button
-                type="button"
-                className="bch-collapsed-tool-btn"
-                onClick={() => {
-                  closeAllModals();
-                  setShowSettings(true);
-                }}
-                title="Cài đặt"
-              >
-                ⚙️
-              </button>
-              <button
-                type="button"
-                className="bch-collapsed-tool-btn danger"
-                onClick={exitApp}
-                title="Thoát ứng dụng"
-              >
-                ⏻
-              </button>
-            </div>
+
           </>
         ) : (
           <>
             <div className="bch-brand-header">
               <div className="bch-brand-info">
-                <button
-                  type="button"
-                  className="bch-hamburger-btn"
-                  onClick={() => setSidebarMode("collapsed")}
-                  title="Thu gọn danh sách (chỉ hiện icon)"
-                >
-                  <span className="bch-hamburger-line" />
-                  <span className="bch-hamburger-line" />
-                  <span className="bch-hamburger-line" />
-                </button>
                 <img src={logoUrl} alt="Henry Chat Pro" className="bch-brand-logo" />
                 <div className="bch-brand-text">
                   <h1 className="bch-brand-title">

@@ -93,6 +93,29 @@ html, body, #root {
    display: block;
 }
 
+/* Nút 3 gạch nằm ở cột rail ngoài, thay cho icon ứng dụng */
+.bch-rail-brand-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+  background: var(--bch-hover);
+  border: 1px solid var(--bch-border-soft);
+  color: var(--bch-text);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.bch-rail-brand-btn:hover {
+  border-color: var(--bch-text-soft);
+}
+.bch-rail-brand-btn .bch-hamburger-line {
+  width: 14px;
+  height: 2px;
+  background: currentColor;
+}
+
 /* COLLAPSED MODE (CHỈ HIỂN THỊ ICON CÁC PROFILE) */
 .bch-collapsed-top {
   width: 100%;
@@ -1741,11 +1764,6 @@ html[data-theme="dark"] .bch-rail-badge {
 }
 
 /* Light: danh sách tài khoản phẳng như danh sách chat trong ảnh */
-html[data-theme="light"] .bch-sidebar {
-  width: 310px;
-  min-width: 310px;
-  max-width: 310px;
-}
 html[data-theme="light"] .bch-brand-header {
   padding: 14px 14px 10px;
 }
