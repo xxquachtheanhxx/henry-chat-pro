@@ -514,6 +514,7 @@ export default function App() {
 
   /* ------------------------ Trung tâm thông báo ------------------------- */
   const [showInbox, setShowInbox] = useState(IS_NOTIF_WINDOW);
+  const [showLan, setShowLan] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
     loadJson<NotificationItem[]>(LS_NOTIF, [])
   );
@@ -601,6 +602,7 @@ export default function App() {
     showAddPlatform ||
     showGroupManager ||
     showInbox ||
+    showLan ||
     deleteTarget !== null;
 
   const closeInboxPanel = useCallback(() => {
@@ -670,7 +672,6 @@ export default function App() {
   }, [settings.theme]);
 
   /* --------------------------- Gửi file LAN --------------------------- */
-  const [showLan, setShowLan] = useState(false);
   const [lanPeers, setLanPeers] = useState<LanPeer[]>([]);
   const [lanPeerId, setLanPeerId] = useState("");
   const [lanText, setLanText] = useState("");
@@ -1768,7 +1769,8 @@ export default function App() {
     [accounts, profileAlerts]
   );
 
-  const modalLeft = sidebarMode === "collapsed" ? 68 : 310;
+  const modalLeft =
+    (IS_NOTIF_WINDOW ? 0 : RAIL_WIDTH) + (sidebarMode === "collapsed" ? 68 : 310);
 
   const renderAvatar = (acc: AccountProfile, size: "card" | "preview") => {
     const plat = getPlatform(acc.platformId);

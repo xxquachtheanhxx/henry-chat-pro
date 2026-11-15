@@ -1383,6 +1383,13 @@ html, body, #root {
   --bch-accent: #2563eb;
   --bch-accent-text: #ffffff;
   --bch-shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
+  --bch-selected: #1c2637;
+  --bch-selected-text: #f8fafc;
+  --bch-selected-sub: #94a3b8;
+  --bch-selected-border: rgba(148, 163, 184, 0.22);
+  --bch-selected-action: rgba(255, 255, 255, 0.1);
+  --bch-selected-bar: #94a3b8;
+  --bch-dot: rgba(148, 163, 184, 0.18);
 }
 
 html[data-theme="light"] {
@@ -1399,6 +1406,13 @@ html[data-theme="light"] {
   --bch-accent: #141414;
   --bch-accent-text: #ffffff;
   --bch-shadow: 0 8px 24px rgba(20, 20, 20, 0.08);
+  --bch-selected: #eceae6;
+  --bch-selected-text: #141414;
+  --bch-selected-sub: #6b7280;
+  --bch-selected-border: rgba(20, 20, 20, 0.08);
+  --bch-selected-action: rgba(20, 20, 20, 0.06);
+  --bch-selected-bar: #141414;
+  --bch-dot: rgba(20, 20, 20, 0.1);
 }
 
 html[data-theme="light"] body {
@@ -1950,4 +1964,226 @@ html[data-theme="light"] .bch-link-btn:hover {
 /* Nền tối mặc định đặt color !important ở body -> phải ghi đè cho theme sáng */
 html[data-theme="light"] body {
   color: #141414 !important;
+}
+
+/* ===================== GIAO DIỆN THỐNG NHẤT CHO CẢ SÁNG & TỐI ===================== */
+html[data-theme] .bch-brand-header {
+  padding: 14px 12px 10px;
+  background: var(--bch-panel);
+  border-bottom: 1px solid var(--bch-border-soft);
+}
+html[data-theme] .bch-brand-name {
+  background: none;
+  -webkit-text-fill-color: var(--bch-text);
+  color: var(--bch-text);
+}
+html[data-theme] .bch-brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--bch-text);
+}
+html[data-theme] .bch-brand-sub {
+  font-size: 11.5px;
+  color: var(--bch-muted);
+}
+html[data-theme] .bch-brand-bell-btn,
+html[data-theme] .bch-brand-add-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  box-shadow: none;
+  font-size: 15px;
+}
+html[data-theme] .bch-brand-bell-btn {
+  background: transparent;
+  border: 1px solid var(--bch-border);
+  color: var(--bch-text);
+}
+html[data-theme] .bch-brand-bell-btn:hover {
+  background: var(--bch-hover);
+}
+html[data-theme] .bch-brand-add-btn {
+  background: var(--bch-accent);
+  border: 1px solid var(--bch-accent);
+  color: var(--bch-accent-text);
+  font-size: 17px;
+}
+
+html[data-theme] .bch-section-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 6px 10px 0;
+}
+html[data-theme] .bch-section-label {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--bch-muted);
+  font-weight: 700;
+}
+html[data-theme] .bch-chip {
+  background: var(--bch-panel-2);
+  border: 1px solid var(--bch-border-soft);
+  color: var(--bch-text-soft);
+  border-radius: 999px;
+  padding: 5px 10px;
+}
+html[data-theme] .bch-chip:hover {
+  background: var(--bch-hover);
+  color: var(--bch-text);
+}
+html[data-theme] .bch-chip.active {
+  background: var(--bch-accent);
+  border-color: var(--bch-accent);
+  color: var(--bch-accent-text);
+  box-shadow: none;
+}
+html[data-theme] .bch-link-btn {
+  color: var(--bch-text);
+  font-weight: 600;
+}
+html[data-theme] .bch-link-btn:hover {
+  opacity: 0.75;
+}
+
+/* Hàng tài khoản phẳng, thống nhất hai theme */
+html[data-theme] .bch-acc-card {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--bch-border-soft);
+  border-radius: 10px;
+  padding: 8px;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+html[data-theme] .bch-acc-card:hover {
+  background: var(--bch-hover);
+  border-color: transparent;
+  border-bottom-color: var(--bch-border-soft);
+}
+html[data-theme] .bch-acc-card.active {
+  background: var(--bch-selected);
+  border-color: var(--bch-selected-border);
+  box-shadow: inset 3px 0 0 var(--bch-selected-bar);
+}
+html[data-theme] .bch-acc-card.active .bch-acc-name,
+html[data-theme] .bch-acc-card.active .bch-acc-alert-snippet {
+  color: var(--bch-selected-text);
+}
+html[data-theme] .bch-acc-card.active .bch-acc-sub {
+  color: var(--bch-selected-sub);
+}
+html[data-theme] .bch-acc-name {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+html[data-theme] .bch-acc-sub {
+  font-size: 11.5px;
+  color: var(--bch-muted);
+}
+
+/* Nút thao tác gọn, chỉ hiện khi hover / hàng đang chọn */
+html[data-theme] .bch-acc-actions.compact {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  margin-top: 0;
+  transition: max-height 0.16s ease, opacity 0.16s ease, margin-top 0.16s ease;
+}
+html[data-theme] .bch-acc-card:hover .bch-acc-actions.compact,
+html[data-theme] .bch-acc-card.active .bch-acc-actions.compact {
+  max-height: 40px;
+  opacity: 1;
+  margin-top: 6px;
+}
+html[data-theme] .bch-acc-actions.compact .bch-action-btn {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+  border-radius: 8px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--bch-text-soft);
+}
+html[data-theme] .bch-acc-actions.compact .bch-action-btn:hover {
+  background: var(--bch-hover);
+  border-color: var(--bch-border);
+}
+html[data-theme] .bch-acc-card.active .bch-acc-actions.compact .bch-action-btn {
+  background: var(--bch-selected-action);
+  border-color: transparent;
+  color: var(--bch-selected-text);
+}
+
+/* Vùng chat: cùng bố cục, chỉ đổi tông màu */
+html[data-theme] .bch-chat-viewport {
+  background-color: var(--bch-panel);
+  background-image: radial-gradient(var(--bch-dot) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+html[data-theme] .bch-stage-card {
+  background: var(--bch-panel);
+  border: 1px solid var(--bch-border-soft);
+  box-shadow: var(--bch-shadow);
+  border-radius: 16px;
+  padding: 28px 26px;
+}
+html[data-theme] .bch-sidebar-footer {
+  background: var(--bch-panel);
+  padding: 10px 12px 12px;
+  gap: 8px;
+}
+html[data-theme] .bch-footer-row .bch-btn {
+  background: transparent;
+  border: 1px solid var(--bch-border);
+  color: var(--bch-text-soft);
+  font-weight: 500;
+  border-radius: 9px;
+}
+html[data-theme] .bch-footer-row .bch-btn:hover {
+  background: var(--bch-hover);
+  color: var(--bch-text);
+}
+html[data-theme] .bch-status-banner {
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--bch-panel-2);
+  color: var(--bch-muted);
+  border: 1px solid var(--bch-border-soft);
+}
+
+/* Chuyển theme mượt, không nháy */
+.bch-shell,
+.bch-rail,
+.bch-sidebar,
+.bch-brand-header,
+.bch-acc-card,
+.bch-chat-viewport,
+.bch-stage-card,
+.bch-modal-card,
+.bch-inbox-card,
+.bch-btn,
+.bch-input,
+.bch-select,
+.bch-chip {
+  transition: background-color 0.24s ease, color 0.24s ease, border-color 0.24s ease,
+    box-shadow 0.24s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bch-shell,
+  .bch-rail,
+  .bch-sidebar,
+  .bch-brand-header,
+  .bch-acc-card,
+  .bch-chat-viewport,
+  .bch-stage-card,
+  .bch-modal-card,
+  .bch-inbox-card,
+  .bch-btn,
+  .bch-input,
+  .bch-select,
+  .bch-chip {
+    transition: none;
+  }
 }
