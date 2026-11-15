@@ -54,9 +54,19 @@ pub struct ProfileAlertEvent {
 
 /// Cấu hình web riêng của từng profile (hiện có proxy; vân tay sẽ thêm ở P2).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrivacyConfig {
+    #[serde(default)]
+    pub block_read_receipts: bool,
+    #[serde(default)]
+    pub block_typing: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileWebConfig {
     #[serde(default)]
     pub proxy: net::ProxyConfig,
+    #[serde(default)]
+    pub privacy: PrivacyConfig,
 }
 
 pub struct WorkspaceState {
@@ -75,6 +85,7 @@ pub struct WorkspaceState {
     pub max_live_webviews: Mutex<usize>,
     pub minimize_to_tray: Mutex<bool>,
     pub tray_profiles: Mutex<Vec<(String, String, String)>>, // (id, name, platform_name)
+    pub privacy_mode: Mutex<(bool, bool)>, // (block_read_receipts, block_typing)
 }
 
 impl WorkspaceState {
@@ -93,6 +104,7 @@ impl WorkspaceState {
             max_live_webviews: Mutex::new(3),
             minimize_to_tray: Mutex::new(true),
             tray_profiles: Mutex::new(Vec::new()),
+            privacy_mode: Mutex::new((false, false)),
         }
     }
 
@@ -1255,16 +1267,30 @@ fn build_telegram_injection_script() -> String {
 /// Kịch bản tiêm theo từng nền tảng:
 /// - Mọi nền tảng nhận bộ giám sát thông báo / cuộc gọi (chỉ đọc DOM).
 /// - Telegram nhận thêm bộ sửa Media / Blob Viewer.
-fn build_injection_script(platform: &str, profile_id: &str, notify_enabled: bool) -> String {
+fn build_injection_script(
+    platform: &str,
+    profile_id: &str,
+    notify_enabled: bool,
+    privacy: &PrivacyConfig,
+) -> String {
     let notify_script = build_notify_call_monitor_script(platform, profile_id, notify_enabled);
+    let mut script = notify_script;
+    // Privacy interceptor (chặn đã đọc / đang gõ) — chỉ bật khi có cấu hình.
+    if privacy.block_read_receipts || privacy.block_typing {
+        script = format!(
+            "{}\n{}",
+            script,
+            build_privacy_script(platform, privacy.block_read_receipts, privacy.block_typing)
+        );
+    }
     if platform == "telegram" {
         // Tạm tắt script media viewer (có thể gây lỗi gửi tin vào nhóm). Bật lại sau khi xác nhận.
         let telegram_media_fix_enabled: bool = false;
         if telegram_media_fix_enabled {
-            return format!("{}\n{}", notify_script, build_telegram_injection_script());
+            return format!("{}\n{}", script, build_telegram_injection_script());
         }
     }
-    notify_script
+    script
 }
 
 /// Telegram Web K giữ cache ảnh cũ trong EBWebView -> xóa 1 lần cho mỗi profile để media hiển thị lại.
@@ -1748,7 +1774,13 @@ async fn switch_active_chat_account(
 
         let notify_enabled = state.is_profile_notify_enabled(&profile_id);
         let script_platform = if is_telegram { "telegram" } else { platform.as_str() };
-        let mut script = build_injection_script(script_platform, &profile_id, notify_enabled);
+        let profile_privacy = profile_web.privacy.clone();
+        let mut script = build_injection_script(
+            script_platform,
+            &profile_id,
+            notify_enabled,
+            &profile_privacy,
+        );
         if !script.is_empty() {
             script.push('\n');
         }
@@ -2362,6 +2394,31 @@ async fn hide_to_tray(
     Ok(())
 }
 
+/// Cập nhật chế độ riêng tư (chặn đã đọc/đang gõ) cho tất cả WebView đang chạy.
+#[tauri::command]
+async fn set_privacy_mode(
+    app: AppHandle,
+    state: State<'_, Arc<WorkspaceState>>,
+    block_read_receipts: bool,
+    block_typing: bool,
+) -> Result<(), String> {
+    if let Ok(mut g) = state.privacy_mode.lock() {
+        *g = (block_read_receipts, block_typing);
+    }
+    let js = format!(
+        "window.__BCH_PRIVACY__ = {{ enabled: {}, read: {}, typing: {} }};",
+        block_read_receipts || block_typing,
+        block_read_receipts,
+        block_typing
+    );
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("chat_") {
+            let _ = win.eval(&js);
+        }
+    }
+    Ok(())
+}
+
 fn rebuild_tray_menu(app: &AppHandle, state: &Arc<WorkspaceState>) {
     let tray = match app.tray_by_id("main-tray") {
         Some(t) => t,
@@ -2588,6 +2645,7 @@ pub fn run() {
             set_minimize_to_tray,
             update_tray_profiles,
             hide_to_tray,
+            set_privacy_mode,
             save_workspace_snapshot,
             load_workspace_snapshot,
             open_system_browser,
@@ -2595,4 +2653,124 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Lỗi chạy ứng dụng Tauri");
+}
+
+/// Script chặn tín hiệu "đã đọc" và "đang gõ" cho từng nền tảng.
+fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) -> String {
+    let enabled = block_read || block_typing;
+    format!(
+        r#"
+        (function() {{
+            if (window.__BCH_PRIVACY_SCRIPT__) return;
+            window.__BCH_PRIVACY_SCRIPT__ = true;
+            window.__BCH_PRIVACY__ = {{ enabled: {enabled}, read: {block_read}, typing: {block_typing} }};
+
+            function isBlocked(url, body) {{
+                if (!window.__BCH_PRIVACY__ || !window.__BCH_PRIVACY__.enabled) return false;
+                const u = String(url || '').toLowerCase();
+                const b = String(body || '').toLowerCase();
+                const plat = '{platform}';
+                // Quy tắc theo nền tảng (khớp URL/body).
+                const readKeys = ['seen', 'read', 'markread', 'mark_read', 'readreceipt', 'read_receipt'];
+                const typingKeys = ['typing', 'settyping', 'set_typing', 'istyping'];
+                let blocked = false;
+                if (window.__BCH_PRIVACY__.read) {{
+                    for (const k of readKeys) {{
+                        if (u.includes(k) || b.includes(k)) {{ blocked = true; break; }}
+                    }}
+                }}
+                if (!blocked && window.__BCH_PRIVACY__.typing) {{
+                    for (const k of typingKeys) {{
+                        if (u.includes(k) || b.includes(k)) {{ blocked = true; break; }}
+                    }}
+                }}
+                // Quy tắc riêng Messenger (GraphQL operationName).
+                if (plat === 'messenger') {{
+                    if (window.__BCH_PRIVACY__.read && (b.includes('markthreadasread') || b.includes('mark_thread_as_read'))) blocked = true;
+                    if (window.__BCH_PRIVACY__.typing && (b.includes('settypingindicator') || b.includes('set_typing_indicator'))) blocked = true;
+                }}
+                // Quy tắc riêng Zalo.
+                if (plat === 'zalo') {{
+                    if (window.__BCH_PRIVACY__.read && (u.includes('/seen') || u.includes('zalo.me/api/seen'))) blocked = true;
+                    if (window.__BCH_PRIVACY__.typing && (u.includes('typing'))) blocked = true;
+                }}
+                if (blocked) {{
+                    try {{ console.log('[BCH privacy] blocked', url); }} catch (e) {{}}
+                }}
+                return blocked;
+            }}
+
+            // fetch
+            try {{
+                const origFetch = window.fetch;
+                window.fetch = function(input, init) {{
+                    try {{
+                        const url = (typeof input === 'string') ? input : (input && input.url) ? input.url : '';
+                        const body = init && init.body ? init.body : '';
+                        if (isBlocked(url, body)) {{
+                            return Promise.resolve(new Response('{{}}', {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }}));
+                        }}
+                    }} catch (e) {{}}
+                    return origFetch.apply(this, arguments);
+                }};
+            }} catch (e) {{}}
+
+            // XMLHttpRequest
+            try {{
+                const origOpen = XMLHttpRequest.prototype.open;
+                const origSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.open = function(method, url) {{
+                    this.__bch_url = url;
+                    return origOpen.apply(this, arguments);
+                }};
+                XMLHttpRequest.prototype.send = function(body) {{
+                    try {{
+                        if (isBlocked(this.__bch_url, body)) {{
+                            // Giả lập thành công
+                            try {{
+                                Object.defineProperty(this, 'status', {{ value: 200, writable: true }});
+                            }} catch (e) {{}}
+                            return;
+                        }}
+                    }} catch (e) {{}}
+                    return origSend.apply(this, arguments);
+                }};
+            }} catch (e) {{}}
+
+            // sendBeacon
+            try {{
+                const origBeacon = navigator.sendBeacon;
+                navigator.sendBeacon = function(url, data) {{
+                    try {{
+                        if (isBlocked(url, data)) return true;
+                    }} catch (e) {{}}
+                    return origBeacon.apply(this, arguments);
+                }};
+            }} catch (e) {{}}
+
+            // WebSocket: chặn frame chứa từ khoá (best-effort, chỉ kiểm tra chuỗi)
+            try {{
+                const OrigWS = window.WebSocket;
+                function WrappedWS(url, protocols) {{
+                    const ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
+                    const origSend = ws.send.bind(ws);
+                    ws.send = function(data) {{
+                        try {{
+                            const s = (typeof data === 'string') ? data : '';
+                            if (s && isBlocked(url, s)) return;
+                        }} catch (e) {{}}
+                        return origSend(data);
+                    }};
+                    return ws;
+                }}
+                WrappedWS.prototype = OrigWS.prototype;
+                window.WebSocket = WrappedWS;
+            }} catch (e) {{}}
+        }})();
+        "#,
+        enabled = enabled,
+        block_read = block_read,
+        block_typing = block_typing,
+        platform = platform
+    )
 }

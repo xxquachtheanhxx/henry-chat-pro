@@ -30,8 +30,14 @@ export interface ProxyConfig {
 }
 
 /** Cấu hình web riêng của profile (schema v3). P2 sẽ thêm `fingerprint` vào đây. */
+export interface PrivacyConfig {
+  blockReadReceipts: boolean;
+  blockTyping: boolean;
+}
+
 export interface ProfileWebConfig {
   proxy: ProxyConfig;
+  privacy?: PrivacyConfig;
 }
 
 export interface ProxyTestResult {
@@ -114,6 +120,10 @@ export interface WorkspaceSettings {
   alwaysOnTop: boolean;
   /** Thu xuống khay hệ thống khi bấm đóng thay vì thoát */
   minimizeToTray: boolean;
+  /** Chặn gửi tín hiệu "đã đọc" */
+  privacyBlockReadReceipts: boolean;
+  /** Chặn gửi tín hiệu "đang gõ" */
+  privacyBlockTyping: boolean;
   /** Số WebView giữ chạy đồng thời (0 = không giới hạn) */
   maxLiveWebviews: number;
 }
@@ -447,6 +457,12 @@ export default function App() {
       alwaysOnTop: !!saved.alwaysOnTop,
       minimizeToTray:
         typeof saved.minimizeToTray === "boolean" ? saved.minimizeToTray : true,
+      privacyBlockReadReceipts:
+        typeof saved.privacyBlockReadReceipts === "boolean"
+          ? saved.privacyBlockReadReceipts
+          : false,
+      privacyBlockTyping:
+        typeof saved.privacyBlockTyping === "boolean" ? saved.privacyBlockTyping : false,
       maxLiveWebviews:
         typeof saved.maxLiveWebviews === "number" ? saved.maxLiveWebviews : 3,
     };
@@ -584,6 +600,10 @@ export default function App() {
   useEffect(() => {
     saveJson(LS_SETTINGS, settings);
     void callTauri("set_minimize_to_tray", { enabled: settings.minimizeToTray });
+    void callTauri("set_privacy_mode", {
+      blockReadReceipts: settings.privacyBlockReadReceipts,
+      blockTyping: settings.privacyBlockTyping,
+    });
   }, [settings]);
 
   useEffect(() => {
@@ -2834,6 +2854,34 @@ export default function App() {
                 />
                 Thu xuống khay hệ thống khi bấm đóng (thoát thật qua menu khay)
               </label>
+              <div style={{ marginTop: 12, borderTop: "1px solid #334155", paddingTop: 10 }}>
+                <div style={{ fontSize: 12.5, color: "#cbd5e1", marginBottom: 6, fontWeight: 600 }}>
+                  Riêng tư (chặn tín hiệu đã đọc / đang gõ)
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#cbd5e1", marginTop: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.privacyBlockReadReceipts}
+                    onChange={(e) =>
+                      setSettings((prev) => ({ ...prev, privacyBlockReadReceipts: e.target.checked }))
+                    }
+                  />
+                  Không gửi "đã đọc" (read receipt)
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#cbd5e1", marginTop: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.privacyBlockTyping}
+                    onChange={(e) =>
+                      setSettings((prev) => ({ ...prev, privacyBlockTyping: e.target.checked }))
+                    }
+                  />
+                  Không gửi "đang gõ" (typing indicator)
+                </label>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "#94a3b8" }}>
+                  Áp dụng cho mọi profile. Có thể không hiệu quả trên một số nền tảng (Telegram MTProto).
+                </p>
+              </div>
               <p style={{ margin: "10px 0 0", fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
                 ⌨️ Phím tắt: <strong>Ctrl + 1…9</strong> mở tài khoản theo thứ tự đang hiển thị •{" "}
                 <strong>Ctrl + Tab</strong> / <strong>Ctrl + Shift + Tab</strong> chuyển kế tiếp hoặc
