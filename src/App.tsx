@@ -645,10 +645,26 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(LS_SIDEBAR, sidebarMode);
-    void callTauri("set_sidebar_width", {
-      width: RAIL_WIDTH + SIDEBAR_WIDTH_MAP[sidebarMode],
-    });
-  }, [sidebarMode]);
+    // Đo trực tiếp mép trái vùng chat trong DOM: WebView nhúng sẽ bắt đầu đúng mốc này,
+    // nên không thể đè lên rail/sidebar hay nút tạo profile dù CSS thay đổi.
+    const sendWidth = () => {
+      const viewport = document.querySelector(".bch-chat-viewport");
+      const left = viewport
+        ? Math.round(viewport.getBoundingClientRect().left)
+        : RAIL_WIDTH + SIDEBAR_WIDTH_MAP[sidebarMode];
+      if (left > 0) {
+        void callTauri("set_sidebar_width", { width: left });
+      }
+    };
+    const raf = requestAnimationFrame(sendWidth);
+    const timer = window.setTimeout(sendWidth, 120);
+    window.addEventListener("resize", sendWidth);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", sendWidth);
+    };
+  }, [sidebarMode, settings.theme]);
 
   useEffect(() => {
     saveJson(LS_SETTINGS, settings);
@@ -1024,7 +1040,8 @@ export default function App() {
       url,
       profileId: selectedAccount.id,
       profileName: selectedAccount.name,
-      sidebarWidth: SIDEBAR_WIDTH_MAP[sidebarMode],
+      // Phải cộng rail, nếu không WebView sẽ phủ lên 56px cuối sidebar (vùng nút tạo profile).
+      sidebarWidth: RAIL_WIDTH + SIDEBAR_WIDTH_MAP[sidebarMode],
       webConfig: webConfigJson(selectedAccount),
     });
   }, [anyModalOpen, selectedAccount, sidebarMode, accountUrl, flashStatus, webConfigVersion]);
