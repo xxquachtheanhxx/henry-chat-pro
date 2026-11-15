@@ -42,6 +42,13 @@ export interface ProxyTestResult {
   message: string;
 }
 
+export interface UserGroup {
+  id: string;
+  name: string;
+  color: string;
+  createdAt: number;
+}
+
 export interface AccountProfile {
   id: string;
   name: string;
@@ -50,6 +57,8 @@ export interface AccountProfile {
   avatarDataUrl?: string;
   pinned?: boolean;
   notificationsEnabled?: boolean;
+  /** Nhóm người dùng tự tạo (một tài khoản có thể thuộc nhiều nhóm). */
+  groupIds?: string[];
   /** Schema v3: cấu hình mạng/vân tay riêng cho từng profile. */
   web?: ProfileWebConfig;
   createdAt: number;
@@ -145,6 +154,7 @@ function webConfigJson(acc: AccountProfile | null): string {
 
 const LS_PLATFORMS = "bch_pro_platforms_v1";
 const LS_ACCOUNTS = "bch_pro_accounts_v1";
+const LS_GROUPS = "bch_pro_groups_v1";
 const LS_SIDEBAR = "bch_pro_sidebar_mode_v1";
 const LS_SETTINGS = "bch_pro_settings_v1";
 const LS_SELECTED = "bch_pro_selected_account_v1";
@@ -401,6 +411,11 @@ export default function App() {
     return Array.isArray(saved) ? saved : [];
   });
 
+  const [groups, setGroups] = useState<UserGroup[]>(() => {
+    const saved = loadJson<UserGroup[] | null>(LS_GROUPS, null);
+    return Array.isArray(saved) ? saved : [];
+  });
+
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() =>
     localStorage.getItem(LS_SIDEBAR) === "collapsed" ? "collapsed" : "full"
   );
@@ -412,7 +427,11 @@ export default function App() {
     return first?.id || "";
   });
 
-  const [selectedPlatformFilter, setSelectedPlatformFilter] = useState<string>("all");
+  type SidebarFilter =
+    | { kind: "all" }
+    | { kind: "platform"; id: string }
+    | { kind: "group"; id: string };
+  const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>({ kind: "all" });
   const [settings, setSettings] = useState<WorkspaceSettings>(() => {
     const saved = loadJson<Partial<WorkspaceSettings>>(LS_SETTINGS, {});
     return {
@@ -442,6 +461,10 @@ export default function App() {
   const [showEditAccount, setShowEditAccount] = useState(false);
   const [showAddPlatform, setShowAddPlatform] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AccountProfile | null>(null);
+  const [showGroupManager, setShowGroupManager] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupColor, setNewGroupColor] = useState("#6366F1");
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 
   /* ------------------------------ Form state ------------------------------ */
   const [newAccName, setNewAccName] = useState("");
@@ -449,10 +472,12 @@ export default function App() {
   const [newAccCustomUrl, setNewAccCustomUrl] = useState("");
   const [newAccNotify, setNewAccNotify] = useState(true);
   const [newAccAvatar, setNewAccAvatar] = useState<string | undefined>(undefined);
+  const [newAccGroupIds, setNewAccGroupIds] = useState<string[]>([]);
 
   const [editingAccount, setEditingAccount] = useState<AccountProfile | null>(null);
   const [editName, setEditName] = useState("");
   const [editCustomUrl, setEditCustomUrl] = useState("");
+  const [editGroupIds, setEditGroupIds] = useState<string[]>([]);
   const [editNotify, setEditNotify] = useState(true);
   const [editAvatar, setEditAvatar] = useState<string | undefined>(undefined);
   const [editTab, setEditTab] = useState<"general" | "network">("general");
@@ -488,6 +513,13 @@ export default function App() {
     [platforms]
   );
 
+  const profileInitials = useCallback((name: string): string => {
+    const words = (name || "").trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return "?";
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  }, []);
+
   const accountUrl = useCallback(
     (acc: AccountProfile): string => {
       const plat = getPlatform(acc.platformId);
@@ -501,6 +533,7 @@ export default function App() {
     showAddAccount ||
     showEditAccount ||
     showAddPlatform ||
+    showGroupManager ||
     showInbox ||
     deleteTarget !== null;
 
@@ -509,6 +542,7 @@ export default function App() {
     setShowAddAccount(false);
     setShowEditAccount(false);
     setShowAddPlatform(false);
+    setShowGroupManager(false);
     setShowInbox(false);
     setDeleteTarget(null);
   }, []);
@@ -521,6 +555,10 @@ export default function App() {
   useEffect(() => {
     saveJson(LS_PLATFORMS, platforms);
   }, [platforms]);
+
+  useEffect(() => {
+    saveJson(LS_GROUPS, groups);
+  }, [groups]);
 
   useEffect(() => {
     if (!saveJson(LS_ACCOUNTS, accounts)) {
@@ -686,15 +724,17 @@ export default function App() {
 
   /* ----------------------- Đồng bộ danh sách & lựa chọn -------------------- */
   const filteredAccounts = useMemo(() => {
-    const list =
-      selectedPlatformFilter === "all"
-        ? accounts
-        : accounts.filter((a) => a.platformId === selectedPlatformFilter);
+    let list = accounts;
+    if (sidebarFilter.kind === "platform") {
+      list = accounts.filter((a) => a.platformId === sidebarFilter.id);
+    } else if (sidebarFilter.kind === "group") {
+      list = accounts.filter((a) => (a.groupIds || []).includes(sidebarFilter.id));
+    }
     return [...list].sort((a, b) => {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
       return a.createdAt - b.createdAt;
     });
-  }, [accounts, selectedPlatformFilter]);
+  }, [accounts, sidebarFilter]);
 
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.id === selectedAccountId) || null,
@@ -958,15 +998,16 @@ export default function App() {
     (platformId?: string) => {
       setNewAccName("");
       setNewAccPlatformId(
-        platformId || (selectedPlatformFilter !== "all" ? selectedPlatformFilter : "zalo")
+        platformId || (sidebarFilter.kind === "platform" ? sidebarFilter.id : "zalo")
       );
       setNewAccCustomUrl("");
       setNewAccNotify(true);
       setNewAccAvatar(undefined);
+      setNewAccGroupIds([]);
       closeAllModals();
       setShowAddAccount(true);
     },
-    [closeAllModals, selectedPlatformFilter]
+    [closeAllModals, sidebarFilter]
   );
 
   const openEditAccount = useCallback(
@@ -976,6 +1017,7 @@ export default function App() {
       setEditCustomUrl(acc.customUrl || "");
       setEditNotify(acc.notificationsEnabled !== false);
       setEditAvatar(acc.avatarDataUrl);
+      setEditGroupIds(acc.groupIds || []);
       setEditProxy(normalizeProxy(acc.web?.proxy));
       setEditTab("general");
       setProxyResult(null);
@@ -1064,12 +1106,13 @@ export default function App() {
       avatarDataUrl: newAccAvatar,
       notificationsEnabled: newAccNotify,
       pinned: false,
+      groupIds: newAccGroupIds,
       createdAt: Date.now(),
     };
 
     setAccounts((prev) => [...prev, acc]);
     if (custom || plat.url) {
-      setSelectedPlatformFilter("all");
+      setSidebarFilter({ kind: "all" });
       setSelectedAccountId(acc.id);
     }
     setShowAddAccount(false);
@@ -1104,6 +1147,7 @@ export default function App() {
               customUrl: custom ? normalizeUrl(custom) : undefined,
               notificationsEnabled: editNotify,
               avatarDataUrl: editAvatar,
+              groupIds: editGroupIds,
               web: { ...(a.web || { proxy: DEFAULT_PROXY }), proxy: nextProxy },
             }
           : a
@@ -1266,7 +1310,7 @@ export default function App() {
       badge,
     };
     setPlatforms((prev) => [...prev, plat]);
-    setSelectedPlatformFilter(plat.id);
+    setSidebarFilter({ kind: "platform", id: plat.id });
     setShowAddPlatform(false);
     setNewPlatName("");
     setNewPlatUrl("");
@@ -1282,8 +1326,63 @@ export default function App() {
     }
     if (!window.confirm(`Xóa nền tảng "${plat.name}"?`)) return;
     setPlatforms((prev) => prev.filter((p) => p.id !== plat.id));
-    if (selectedPlatformFilter === plat.id) setSelectedPlatformFilter("all");
+    if (sidebarFilter.kind === "platform" && sidebarFilter.id === plat.id)
+      setSidebarFilter({ kind: "all" });
     flashStatus(`Đã xóa nền tảng "${plat.name}"`);
+  };
+
+  const createGroup = () => {
+    const name = newGroupName.trim();
+    if (!name) {
+      alert("Vui lòng nhập tên nhóm.");
+      return;
+    }
+    if (editingGroupId) {
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === editingGroupId ? { ...g, name, color: newGroupColor } : g
+        )
+      );
+      flashStatus(`Đã cập nhật nhóm "${name}"`);
+    } else {
+      const g: UserGroup = {
+        id: `g_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name,
+        color: newGroupColor,
+        createdAt: Date.now(),
+      };
+      setGroups((prev) => [...prev, g]);
+      flashStatus(`Đã tạo nhóm "${name}"`);
+    }
+    setNewGroupName("");
+    setEditingGroupId(null);
+  };
+
+  const deleteGroup = (g: UserGroup) => {
+    if (!window.confirm(`Xóa nhóm "${g.name}"? (Tài khoản sẽ không bị xóa)`)) return;
+    setGroups((prev) => prev.filter((x) => x.id !== g.id));
+    setAccounts((prev) =>
+      prev.map((a) =>
+        a.groupIds ? { ...a, groupIds: a.groupIds.filter((id) => id !== g.id) } : a
+      )
+    );
+    if (sidebarFilter.kind === "group" && sidebarFilter.id === g.id) {
+      setSidebarFilter({ kind: "all" });
+    }
+    flashStatus(`Đã xóa nhóm "${g.name}"`);
+  };
+
+  const toggleAccountGroup = (accId: string, groupId: string) => {
+    setAccounts((prev) =>
+      prev.map((a) => {
+        if (a.id !== accId) return a;
+        const cur = a.groupIds || [];
+        const next = cur.includes(groupId)
+          ? cur.filter((id) => id !== groupId)
+          : [...cur, groupId];
+        return { ...a, groupIds: next };
+      })
+    );
   };
 
   const handleAvatarPick = async (
@@ -1344,13 +1443,14 @@ export default function App() {
     const style = {
       backgroundColor: acc.avatarDataUrl ? "transparent" : plat.color,
     };
+    const fallback = profileInitials(acc.name);
     if (size === "preview") {
       return (
         <div className="bch-avatar-preview" style={style}>
           {acc.avatarDataUrl ? (
             <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
           ) : (
-            plat.badge
+            fallback
           )}
         </div>
       );
@@ -1360,7 +1460,7 @@ export default function App() {
         {acc.avatarDataUrl ? (
           <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
         ) : (
-          plat.badge
+          fallback
         )}
         <span
           className="bch-acc-dot"
@@ -1397,6 +1497,47 @@ export default function App() {
               </button>
             </div>
 
+            <div style={{ padding: "4px 8px" }}>
+              <select
+                className="bch-select"
+                style={{ width: "100%", fontSize: 11, padding: "4px 6px" }}
+                value={
+                  sidebarFilter.kind === "all"
+                    ? "all"
+                    : sidebarFilter.kind === "platform"
+                    ? `p:${sidebarFilter.id}`
+                    : `g:${sidebarFilter.id}`
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "all") setSidebarFilter({ kind: "all" });
+                  else if (v.startsWith("p:"))
+                    setSidebarFilter({ kind: "platform", id: v.slice(2) });
+                  else if (v.startsWith("g:"))
+                    setSidebarFilter({ kind: "group", id: v.slice(2) });
+                }}
+                title="Chọn nhóm / nền tảng để lọc"
+              >
+                <option value="all">Tất cả</option>
+                <optgroup label="Nền tảng">
+                  {platforms.map((p) => (
+                    <option key={p.id} value={`p:${p.id}`}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+                {groups.length > 0 && (
+                  <optgroup label="Nhóm của bạn">
+                    {groups.map((g) => (
+                      <option key={g.id} value={`g:${g.id}`}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+
             <div className="bch-collapsed-icons-list">
               {filteredAccounts.map((acc) => {
                 const plat = getPlatform(acc.platformId);
@@ -1429,7 +1570,7 @@ export default function App() {
                       {acc.avatarDataUrl ? (
                         <img src={acc.avatarDataUrl} alt={acc.name} className="bch-acc-avatar-img" />
                       ) : (
-                        plat.badge
+                        profileInitials(acc.name)
                       )}
                       {hasCall ? (
                         <span className="bch-collapsed-call-badge" title="Cuộc gọi đến">
@@ -1624,8 +1765,8 @@ export default function App() {
               <div className="bch-plat-chips">
                 <button
                   type="button"
-                  className={`bch-chip ${selectedPlatformFilter === "all" ? "active" : ""}`}
-                  onClick={() => setSelectedPlatformFilter("all")}
+                  className={`bch-chip ${sidebarFilter.kind === "all" ? "active" : ""}`}
+                  onClick={() => setSidebarFilter({ kind: "all" })}
                 >
                   Tất cả ({accounts.length})
                 </button>
@@ -1633,8 +1774,10 @@ export default function App() {
                   <button
                     type="button"
                     key={plat.id}
-                    className={`bch-chip ${selectedPlatformFilter === plat.id ? "active" : ""}`}
-                    onClick={() => setSelectedPlatformFilter(plat.id)}
+                    className={`bch-chip ${
+                      sidebarFilter.kind === "platform" && sidebarFilter.id === plat.id ? "active" : ""
+                    }`}
+                    onClick={() => setSidebarFilter({ kind: "platform", id: plat.id })}
                     title={`${plat.name} — ${plat.url}`}
                   >
                     <span
@@ -1650,6 +1793,56 @@ export default function App() {
                   </button>
                 ))}
               </div>
+
+            <div className="bch-plat-section" style={{ marginTop: 6 }}>
+              <div className="bch-section-top">
+                <span className="bch-section-label">
+                  Nhóm của bạn ({groups.length})
+                </span>
+                <button
+                  type="button"
+                  className="bch-link-btn"
+                  onClick={() => {
+                    closeAllModals();
+                    setNewGroupName("");
+                    setNewGroupColor("#6366F1");
+                    setEditingGroupId(null);
+                    setShowGroupManager(true);
+                  }}
+                >
+                  + Quản lý nhóm
+                </button>
+              </div>
+              <div className="bch-plat-chips">
+                {groups.length === 0 && (
+                  <span style={{ fontSize: 11.5, color: "#64748b" }}>
+                    Chưa có nhóm. Bấm “+ Quản lý nhóm” để tạo.
+                  </span>
+                )}
+                {groups.map((g) => (
+                  <button
+                    type="button"
+                    key={g.id}
+                    className={`bch-chip ${
+                      sidebarFilter.kind === "group" && sidebarFilter.id === g.id ? "active" : ""
+                    }`}
+                    onClick={() => setSidebarFilter({ kind: "group", id: g.id })}
+                    title={g.name}
+                  >
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 999,
+                        backgroundColor: g.color,
+                        display: "inline-block",
+                      }}
+                    />
+                    {g.name} ({accounts.filter((a) => (a.groupIds || []).includes(g.id)).length})
+                  </button>
+                ))}
+              </div>
+            </div>
             </div>
 
             <div className="bch-accounts-container">
@@ -1726,57 +1919,63 @@ export default function App() {
                       </div>
                     )}
 
-                    <div className="bch-acc-actions">
+                    <div className="bch-acc-actions compact">
                       <button
                         type="button"
-                        className={`bch-action-btn ${acc.pinned ? "pinned" : ""}`}
+                        className={`bch-action-btn icon-only ${acc.pinned ? "pinned" : ""}`}
                         onClick={() => togglePin(acc)}
                         title="Ghim tài khoản lên đầu danh sách"
+                        data-tooltip={acc.pinned ? "Bỏ ghim" : "Ghim"}
                       >
-                        {acc.pinned ? "📍 Bỏ ghim" : "📌 Ghim"}
+                        {acc.pinned ? "📍" : "📌"}
                       </button>
                       <button
                         type="button"
-                        className={`bch-action-btn ${notifyOn ? "notify-on" : "notify-off"}`}
+                        className={`bch-action-btn icon-only ${notifyOn ? "notify-on" : "notify-off"}`}
                         onClick={() => toggleNotifications(acc)}
                         title="Bật/tắt thông báo & cảnh báo cuộc gọi"
+                        data-tooltip={notifyOn ? "Tắt thông báo" : "Bật thông báo"}
                       >
-                        {notifyOn ? "🔔 Thông báo" : "🔕 Đã tắt"}
+                        {notifyOn ? "🔔" : "🔕"}
                       </button>
                       <button
                         type="button"
-                        className="bch-action-btn"
+                        className="bch-action-btn icon-only"
                         onClick={() => reloadAccount(acc)}
                         title="Tải lại trang trong khung chat"
+                        data-tooltip="Tải lại"
                       >
-                        ↻ Tải lại
+                        ↻
                       </button>
                       <button
                         type="button"
-                        className="bch-action-btn"
+                        className="bch-action-btn icon-only"
                         onClick={() => openEditAccount(acc)}
                         title="Đổi tên, ảnh đại diện, URL riêng"
+                        data-tooltip="Sửa"
                       >
-                        ✎ Sửa
+                        ✎
                       </button>
                       <button
                         type="button"
-                        className="bch-action-btn"
+                        className="bch-action-btn icon-only"
                         onClick={() => openInBrowser(acc)}
                         title="Mở website bằng trình duyệt hệ thống"
+                        data-tooltip="Mở web"
                       >
-                        🌐 Mở web
+                        🌐
                       </button>
                       <button
                         type="button"
-                        className="bch-action-btn danger"
+                        className="bch-action-btn icon-only danger"
                         onClick={() => {
                           closeAllModals();
                           setDeleteTarget(acc);
                         }}
                         title="Xóa tài khoản và dữ liệu đăng nhập"
+                        data-tooltip="Xóa"
                       >
-                        🗑 Xóa
+                        🗑
                       </button>
                     </div>
                   </div>
@@ -1897,6 +2096,45 @@ export default function App() {
                   <option value={CUSTOM_URL_OPTION_VALUE}>— URL tùy chỉnh —</option>
                 </select>
               </div>
+
+              {groups.length > 0 && (
+                <div className="bch-form-group">
+                  <label className="bch-label">Nhóm người dùng (có thể chọn nhiều)</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {groups.map((g) => (
+                      <label
+                        key={g.id}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 12,
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #334155",
+                          cursor: "pointer",
+                          background: newAccGroupIds.includes(g.id) ? g.color : "transparent",
+                          color: newAccGroupIds.includes(g.id) ? "#fff" : "#cbd5e1",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newAccGroupIds.includes(g.id)}
+                          onChange={() =>
+                            setNewAccGroupIds((prev) =>
+                              prev.includes(g.id)
+                                ? prev.filter((id) => id !== g.id)
+                                : [...prev, g.id]
+                            )
+                          }
+                          style={{ display: "none" }}
+                        />
+                        {g.name}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="bch-form-group">
                 <label className="bch-label">
@@ -2182,6 +2420,45 @@ export default function App() {
                     WebRTC/UDP và QUIC. Proxy có mật khẩu được chuyển tiếp qua relay nội bộ
                     127.0.0.1 — mật khẩu không lộ ra command line.
                   </p>
+                </div>
+              )}
+
+              {groups.length > 0 && (
+                <div className="bch-form-group">
+                  <label className="bch-label">Nhóm người dùng (có thể chọn nhiều)</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {groups.map((g) => (
+                      <label
+                        key={g.id}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 12,
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #334155",
+                          cursor: "pointer",
+                          background: editGroupIds.includes(g.id) ? g.color : "transparent",
+                          color: editGroupIds.includes(g.id) ? "#fff" : "#cbd5e1",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={editGroupIds.includes(g.id)}
+                          onChange={() =>
+                            setEditGroupIds((prev) =>
+                              prev.includes(g.id)
+                                ? prev.filter((id) => id !== g.id)
+                                : [...prev, g.id]
+                            )
+                          }
+                          style={{ display: "none" }}
+                        />
+                        {g.name}
+                      </label>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -2516,6 +2793,124 @@ export default function App() {
               <button type="button" className="bch-btn bch-btn-primary" onClick={() => setShowSettings(false)}>
                 Đóng
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGroupManager && (
+        <div
+          className="bch-modal-overlay"
+          style={{ left: modalLeft }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowGroupManager(false);
+          }}
+        >
+          <div className="bch-modal-card" style={{ maxWidth: 520 }}>
+            <div className="bch-modal-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, color: "#f8fafc" }}>Quản lý nhóm người dùng</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#94a3b8" }}>
+                  Tạo nhóm riêng để gom tài khoản theo ý bạn (không phụ thuộc trang web).
+                </p>
+              </div>
+              <button type="button" className="bch-toast-close" onClick={() => setShowGroupManager(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="bch-form-group">
+              <label className="bch-label">{editingGroupId ? "Sửa nhóm" : "Tạo nhóm mới"}</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  className="bch-input"
+                  value={newGroupName}
+                  onChange={(e) => setNewGroupName(e.target.value)}
+                  placeholder="Tên nhóm, ví dụ: Công việc, Cá nhân..."
+                  autoFocus
+                  style={{ flex: 1 }}
+                />
+                <input
+                  className="bch-input"
+                  type="color"
+                  value={newGroupColor}
+                  onChange={(e) => setNewGroupColor(e.target.value)}
+                  style={{ width: 56, padding: 4 }}
+                />
+                <button type="button" className="bch-btn bch-btn-primary" onClick={createGroup}>
+                  {editingGroupId ? "Lưu" : "Thêm"}
+                </button>
+                {editingGroupId && (
+                  <button
+                    type="button"
+                    className="bch-btn"
+                    onClick={() => {
+                      setEditingGroupId(null);
+                      setNewGroupName("");
+                      setNewGroupColor("#6366F1");
+                    }}
+                  >
+                    Hủy
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="bch-accounts-container" style={{ maxHeight: 260 }}>
+              {groups.length === 0 && (
+                <div className="bch-alert-box bch-alert-info">Chưa có nhóm nào.</div>
+              )}
+              {groups.map((g) => (
+                <div
+                  key={g.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "6px 8px",
+                    borderBottom: "1px solid #1e293b",
+                  }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#cbd5e1", fontSize: 12.5 }}>
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        backgroundColor: g.color,
+                        display: "inline-block",
+                      }}
+                    />
+                    {g.name}
+                    <span style={{ color: "#64748b", fontSize: 11 }}>
+                      ({accounts.filter((a) => (a.groupIds || []).includes(g.id)).length} tài khoản)
+                    </span>
+                  </span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      type="button"
+                      className="bch-btn"
+                      style={{ padding: "2px 8px", fontSize: 11 }}
+                      onClick={() => {
+                        setEditingGroupId(g.id);
+                        setNewGroupName(g.name);
+                        setNewGroupColor(g.color);
+                      }}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      className="bch-btn bch-btn-danger"
+                      style={{ padding: "2px 8px", fontSize: 11 }}
+                      onClick={() => deleteGroup(g)}
+                    >
+                      🗑
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
