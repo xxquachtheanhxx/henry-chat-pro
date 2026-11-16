@@ -1778,8 +1778,9 @@ export default function App() {
     [accounts, profileAlerts]
   );
 
-  const modalLeft =
-    (IS_NOTIF_WINDOW ? 0 : RAIL_WIDTH) + SIDEBAR_WIDTH;
+  // Trong cửa sổ thông báo riêng, overlay phải bắt đầu từ mép trái (0),
+  // nếu không sẽ bị lệch sang phải và che khuất nội dung.
+  const modalLeft = IS_NOTIF_WINDOW ? 0 : RAIL_WIDTH + SIDEBAR_WIDTH;
 
   const renderAvatar = (acc: AccountProfile, size: "card" | "preview") => {
     const plat = getPlatform(acc.platformId);
