@@ -2109,7 +2109,8 @@ html[data-theme] .bch-acc-actions.compact {
   transition: max-height 0.16s ease, opacity 0.16s ease, margin-top 0.16s ease;
 }
 html[data-theme] .bch-acc-card:hover .bch-acc-actions.compact,
-html[data-theme] .bch-acc-card.active .bch-acc-actions.compact {
+html[data-theme] .bch-acc-card.active .bch-acc-actions.compact,
+html[data-theme] .bch-acc-card:focus-within .bch-acc-actions.compact {
   max-height: 40px;
   opacity: 1;
   margin-top: 6px;
@@ -2131,6 +2132,20 @@ html[data-theme] .bch-acc-card.active .bch-acc-actions.compact .bch-action-btn {
   background: var(--bch-selected-action);
   border-color: transparent;
   color: var(--bch-selected-text);
+}
+
+/* Keep account actions reachable without a mouse, and let users select field text. */
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--bch-accent);
+  outline-offset: 2px;
 }
 
 /* Vùng chat: cùng bố cục, chỉ đổi tông màu */

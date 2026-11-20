@@ -256,6 +256,21 @@ fn win32_show_hwnd(raw_hwnd: isize, x: i32, y: i32, w: u32, h: u32) {
 #[cfg(not(target_os = "windows"))]
 fn win32_show_hwnd(_raw_hwnd: isize, _x: i32, _y: i32, _w: u32, _h: u32) {}
 
+/// Đưa focus bàn phím vào cửa sổ chat con (dùng khi bắt máy cuộc gọi đến).
+#[cfg(target_os = "windows")]
+fn win32_focus_hwnd(raw_hwnd: isize) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetFocus(hWnd: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+    if raw_hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let _ = SetFocus(raw_hwnd as *mut std::ffi::c_void);
+    }
+}
+
 /// Cho phép kéo thả file từ Windows Explorer vào WebView2 (kể cả khi chạy quyền Admin / khác mức UIPI)
 #[cfg(target_os = "windows")]
 fn win32_allow_drag_drop_messages(raw_hwnd: isize) {
@@ -1780,6 +1795,13 @@ async fn switch_active_chat_account(
                 .accept_first_mouse(true)
                 .disable_drag_drop_handler()
                 .enable_clipboard_access()
+                // WebView2 không tự cấp quyền micro/camera: nếu không xử lý, cuộc gọi đến
+                // sẽ không thể bắt máy vì getUserMedia bị từ chối.
+                .on_permission_request(|_webview, kind| match kind {
+                    tauri::webview::PermissionKind::Microphone
+                    | tauri::webview::PermissionKind::Camera => tauri::webview::PermissionResponse::Allow,
+                    _ => tauri::webview::PermissionResponse::Default,
+                })
                 .zoom_hotkeys_enabled(true)
                 .on_document_title_changed(move |_win, title| {
                     if title.starts_with("__BCH_") {
@@ -2605,6 +2627,28 @@ async fn open_notification_window(app: AppHandle) -> Result<(), String> {
     show_notification_window(&app)
 }
 
+/// Đưa focus vào khung chat đang hiển thị để thao tác được với hộp thoại cuộc gọi.
+#[tauri::command]
+async fn focus_chat_window(
+    app: AppHandle,
+    state: State<'_, Arc<WorkspaceState>>,
+) -> Result<(), String> {
+    let label = state.active_chat_label.lock().ok().and_then(|g| g.clone());
+    let raw_hwnd = label
+        .and_then(|l| state.created_hwnds.lock().ok().and_then(|m| m.get(&l).copied()))
+        .unwrap_or(0);
+    if raw_hwnd == 0 {
+        return Ok(());
+    }
+    let _ = app.run_on_main_thread(move || {
+        #[cfg(target_os = "windows")]
+        win32_focus_hwnd(raw_hwnd);
+        #[cfg(not(target_os = "windows"))]
+        let _ = raw_hwnd;
+    });
+    Ok(())
+}
+
 #[tauri::command]
 async fn hide_notification_window(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("notif") {
@@ -2811,6 +2855,7 @@ pub fn run() {
             open_notification_window,
             open_profile_from_notification,
             hide_notification_window,
+            focus_chat_window,
             lan::lan_list_peers,
             lan::lan_get_device_name,
             lan::lan_set_device_name,
@@ -2841,7 +2886,9 @@ fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) ->
                 const b = String(body || '').toLowerCase();
                 const plat = '{platform}';
                 // Quy tắc theo nền tảng (khớp URL/body).
-                const readKeys = ['seen', 'read', 'markread', 'mark_read', 'readreceipt', 'read_receipt'];
+                // Không dùng chuỗi quá ngắn như 'read'/'seen': chúng khớp cả 'thread', 'already'…
+                // và sẽ chặn nhầm cả request cuộc gọi. Chỉ khớp đúng API đánh dấu đã đọc.
+                const readKeys = ['markread', 'mark_read', 'readreceipt', 'read_receipt', 'readhistory', 'seenmessages'];
                 const typingKeys = ['typing', 'settyping', 'set_typing', 'istyping'];
                 let blocked = false;
                 if (window.__BCH_PRIVACY__.read) {{
@@ -2934,6 +2981,14 @@ fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) ->
                     return ws;
                 }}
                 WrappedWS.prototype = OrigWS.prototype;
+                // Giữ nguyên các hằng số tĩnh (WebSocket.OPEN…) — nếu mất, code kiểm tra
+                // readyState === WebSocket.OPEN sẽ hỏng và cuộc gọi không kết nối được.
+                try {{ Object.setPrototypeOf(WrappedWS, OrigWS); }} catch (e) {{}}
+                try {{
+                    ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function (k) {{
+                        WrappedWS[k] = OrigWS[k];
+                    }});
+                }} catch (e) {{}}
                 window.WebSocket = WrappedWS;
             }} catch (e) {{}}
         }})();

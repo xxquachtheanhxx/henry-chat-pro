@@ -1991,9 +1991,14 @@ export default function App() {
                       type="button"
                       className="bch-btn bch-btn-success"
                       style={{ padding: "4px 8px", fontSize: 11 }}
-                      onClick={() => selectAccount(account)}
+                      onClick={() => {
+                        selectAccount(account);
+                        // Đưa focus vào WebView để bấm "Trả lời" và cấp micro/camera được.
+                        window.setTimeout(() => void callTauri("focus_chat_window"), 350);
+                        window.setTimeout(() => void callTauri("focus_chat_window"), 1200);
+                      }}
                     >
-                      Mở tài khoản
+                      Nhận cuộc gọi
                     </button>
                   </div>
                 ))}
