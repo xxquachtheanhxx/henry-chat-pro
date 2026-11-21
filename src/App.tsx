@@ -3588,16 +3588,6 @@ export default function App() {
                   type="button"
                   className="bch-btn"
                   onClick={async () => {
-                    const msg = await callTauri<string>("optimize_ram_now");
-                    flashStatus(msg || "Không chạy được tối ưu RAM");
-                  }}
-                >
-                  🧠 Giải phóng RAM
-                </button>
-                <button
-                  type="button"
-                  className="bch-btn"
-                  onClick={async () => {
                     const dir = await callTauri<string>("open_app_data_folder");
                     flashStatus(dir ? `📂 Đã mở ${dir}` : "Không mở được thư mục dữ liệu");
                   }}
@@ -3605,11 +3595,6 @@ export default function App() {
                   📂 Mở thư mục dữ liệu
                 </button>
               </div>
-            </div>
-
-            <div className="bch-alert-box bch-alert-info">
-              Đã loại bỏ toàn bộ tính năng sao lưu / bơm lịch sử Zalo vào web chat: mỗi tài khoản
-              hoạt động như một trình duyệt riêng, dữ liệu tin nhắn do chính website quản lý.
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
