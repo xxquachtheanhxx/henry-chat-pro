@@ -1122,25 +1122,39 @@ export default function App() {
     void callTauri("set_modal_overlay_mode", { open: anyModalOpen });
   }, [anyModalOpen]);
 
+  // Vị trí/kích thước khung chat do `set_chat_insets` lo; đổi layout không được gọi lại lệnh chuyển tài khoản.
+  const leftInsetRef = useRef(leftInset);
+  leftInsetRef.current = leftInset;
+  const switchPayloadKey = useMemo(() => {
+    if (!selectedAccount) return "";
+    return JSON.stringify({
+      platform: selectedAccount.platformId,
+      url: accountUrl(selectedAccount),
+      profileId: selectedAccount.id,
+      profileName: selectedAccount.name,
+      webConfig: webConfigJson(selectedAccount),
+    });
+  }, [selectedAccount, accountUrl]);
+
   useEffect(() => {
-    if (anyModalOpen || !selectedAccount) return;
-    const url = accountUrl(selectedAccount);
-    if (!url) {
-      flashStatus(
-        `⚠️ "${selectedAccount.name}" chưa có địa chỉ website — bấm ✎ Sửa để thêm URL`
-      );
+    if (anyModalOpen || !switchPayloadKey) return;
+    const payload = JSON.parse(switchPayloadKey) as {
+      platform: string;
+      url: string;
+      profileId: string;
+      profileName: string;
+      webConfig: string;
+    };
+    if (!payload.url) {
+      flashStatus(`⚠️ "${payload.profileName}" chưa có địa chỉ website — bấm ✎ Sửa để thêm URL`);
       return;
     }
     void callTauri("switch_active_chat_account", {
-      platform: selectedAccount.platformId,
-      url,
-      profileId: selectedAccount.id,
-      profileName: selectedAccount.name,
+      ...payload,
       // Phải cộng rail, nếu không WebView sẽ phủ lên 56px cuối sidebar (vùng nút tạo profile).
-      sidebarWidth: leftInset,
-      webConfig: webConfigJson(selectedAccount),
+      sidebarWidth: leftInsetRef.current,
     });
-  }, [anyModalOpen, selectedAccount, accountUrl, flashStatus, webConfigVersion, leftInset]);
+  }, [anyModalOpen, switchPayloadKey, flashStatus, webConfigVersion]);
 
   /* --------------------- Lắng nghe sự kiện từ WebView --------------------- */
   const accountsRef = useRef(accounts);
