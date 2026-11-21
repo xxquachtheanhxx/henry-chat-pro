@@ -2728,7 +2728,6 @@ pub fn run() {
         .manage(Arc::clone(&workspace))
         .manage(Arc::clone(&lan_state))
         .setup(move |app| {
-            lan::start(app.handle().clone(), Arc::clone(&lan_state));
             if let Ok(mut guard) = state_for_setup.app_handle.lock() {
                 *guard = Some(app.handle().clone());
             }
@@ -2902,6 +2901,8 @@ pub fn run() {
             hide_notification_window,
             focus_chat_window,
             lan::lan_list_peers,
+            lan::lan_start,
+            lan::lan_set_pair_code,
             lan::lan_get_device_name,
             lan::lan_set_device_name,
             lan::lan_send_text,
