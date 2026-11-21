@@ -1052,6 +1052,18 @@ export default function App() {
     void callTauri("set_max_live_webviews", { maxLive: settings.maxLiveWebviews });
   }, [settings.maxLiveWebviews]);
 
+  // Rust không lưu trạng thái thông báo từng tài khoản qua lần khởi động; đồng bộ lại khi mở app.
+  const notifySyncKey = accounts
+    .map((a) => `${a.platformId}\u0000${a.id}\u0000${a.notificationsEnabled !== false ? 1 : 0}`)
+    .join("\u0001");
+  useEffect(() => {
+    if (!TAURI_READY || !notifySyncKey) return;
+    for (const entry of notifySyncKey.split("\u0001")) {
+      const [platform, profileId, on] = entry.split("\u0000");
+      void callTauri("set_profile_notifications_enabled", { platform, profileId, enabled: on === "1" });
+    }
+  }, [notifySyncKey]);
+
   /* ----------------------- Đồng bộ danh sách & lựa chọn -------------------- */
   const filteredAccounts = useMemo(() => {
     let list = accounts;
