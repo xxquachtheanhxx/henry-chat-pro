@@ -691,7 +691,6 @@ html, body, #root {
   bottom: 0;
   left: 310px;
   background: var(--bch-panel);
-  backdrop-filter: blur(10px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1106,8 +1105,7 @@ html, body, #root {
   position: fixed;
   inset: 0;
   z-index: 9998;
-  background: rgba(3, 7, 18, 0.55);
-  backdrop-filter: blur(3px);
+  background: rgba(3, 7, 18, 0.62);
   display: flex;
   justify-content: flex-end;
 }

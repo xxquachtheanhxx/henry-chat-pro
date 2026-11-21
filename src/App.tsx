@@ -3627,11 +3627,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className="bch-alert-box bch-alert-info">
-              Đã loại bỏ toàn bộ tính năng sao lưu / bơm lịch sử Zalo vào web chat: mỗi tài khoản
-              hoạt động như một trình duyệt riêng, dữ liệu tin nhắn do chính website quản lý.
-            </div>
-
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
               <button type="button" className="bch-btn bch-btn-danger" onClick={exitApp}>
                 ⏻ Thoát ứng dụng
