@@ -133,9 +133,15 @@ export interface WorkspaceSettings {
   maxLiveWebviews: number;
   /** Sáng / Tối / Theo hệ thống */
   theme: ThemeMode;
+  /** Ẩn toàn bộ khung tài khoản, chỉ còn thanh điều hướng */
+  hideAccountPanel: boolean;
+  /** Thanh điều hướng đặt ở bên trái hay bên phải ứng dụng */
+  railSide: RailSide;
 }
 
 export type ThemeMode = "light" | "dark" | "system";
+
+export type RailSide = "left" | "right";
 
 export interface LanPeer {
   id: string;
@@ -497,6 +503,8 @@ export default function App() {
       maxLiveWebviews:
         typeof saved.maxLiveWebviews === "number" ? saved.maxLiveWebviews : 3,
       theme: saved.theme === "light" || saved.theme === "dark" ? saved.theme : "system",
+      hideAccountPanel: !!saved.hideAccountPanel,
+      railSide: saved.railSide === "right" ? "right" : "left",
     };
   });
 
@@ -516,6 +524,24 @@ export default function App() {
 
   /* -------------------------------- Modals -------------------------------- */
   const [showSettings, setShowSettings] = useState(false);
+
+  /** Mở tạm khung tài khoản khi đang bật chế độ ẩn (bấm 💬 trên thanh điều hướng). */
+  const [panelPeek, setPanelPeek] = useState(false);
+  /** Bảng nổi hiện profile của một nhóm khi bấm vào nhóm trên thanh điều hướng. */
+  const [railGroupMenu, setRailGroupMenu] = useState<{ id: string; top: number } | null>(null);
+  const panelVisible = !settings.hideAccountPanel || panelPeek;
+  /** Phần chiều ngang mà thanh điều hướng + khung tài khoản chiếm hai bên. */
+  const accountPanelSpan = panelVisible ? RAIL_WIDTH + SIDEBAR_WIDTH : RAIL_WIDTH;
+  const leftInset = IS_NOTIF_WINDOW
+    ? 0
+    : settings.railSide === "left"
+      ? accountPanelSpan
+      : 0;
+  const rightInset = IS_NOTIF_WINDOW
+    ? 0
+    : settings.railSide === "right"
+      ? accountPanelSpan
+      : 0;
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showEditAccount, setShowEditAccount] = useState(false);
   const [showAddPlatform, setShowAddPlatform] = useState(false);
@@ -587,6 +613,11 @@ export default function App() {
     [getPlatform]
   );
 
+  // Bảng chọn profile của nhóm chỉ nằm gọn trong khu rail + khung tài khoản khi panel đang mở;
+  // nếu panel bị ẩn thì nó sẽ đè lên khung chat (WebView là cửa sổ native luôn nằm trên DOM),
+  // nên phải bật chế độ overlay để hạ khung chat xuống dưới.
+  const railFlyoutOverlay = railGroupMenu !== null && !panelVisible;
+
   const anyModalOpen =
     showSettings ||
     showAddAccount ||
@@ -595,6 +626,7 @@ export default function App() {
     showGroupManager ||
     showInbox ||
     showLan ||
+    railFlyoutOverlay ||
     deleteTarget !== null;
 
   const closeInboxPanel = useCallback(() => {
@@ -638,24 +670,39 @@ export default function App() {
   useEffect(() => {
     // Đo trực tiếp mép trái vùng chat trong DOM: WebView nhúng sẽ bắt đầu đúng mốc này,
     // nên không thể đè lên rail/sidebar hay nút tạo profile dù CSS thay đổi.
+    let lastSent = "";
     const sendWidth = () => {
+      if (IS_NOTIF_WINDOW) return;
       const viewport = document.querySelector(".bch-chat-viewport");
-      const left = viewport
-        ? Math.round(viewport.getBoundingClientRect().left)
-        : RAIL_WIDTH + SIDEBAR_WIDTH;
-      if (left > 0) {
-        void callTauri("set_sidebar_width", { width: left });
-      }
+      const rect = viewport ? viewport.getBoundingClientRect() : null;
+      // Chừa đúng phần bên trái và bên phải đang bị rail/khung tài khoản chiếm.
+      const left = rect ? Math.round(rect.left) : leftInset;
+      const right = rect ? Math.round(window.innerWidth - rect.right) : rightInset;
+      const key = `${left}:${right}`;
+      if (key === lastSent) return;
+      lastSent = key;
+      void callTauri("set_chat_insets", { left, right });
     };
-    const raf = requestAnimationFrame(sendWidth);
-    const timer = window.setTimeout(sendWidth, 120);
-    window.addEventListener("resize", sendWidth);
+    // Bám theo sidebar trong lúc nó trượt (thêm/bớt khung tài khoản) để WebView không giật.
+    let frame = 0;
+    let stopAt = 0;
+    const tick = (ts: number) => {
+      sendWidth();
+      frame = ts < stopAt ? requestAnimationFrame(tick) : 0;
+    };
+    const track = (ms = 420) => {
+      stopAt = performance.now() + ms;
+      if (!frame) frame = requestAnimationFrame(tick);
+    };
+    sendWidth();
+    track();
+    const onResize = () => track(260);
+    window.addEventListener("resize", onResize);
     return () => {
-      cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
-      window.removeEventListener("resize", sendWidth);
+      window.removeEventListener("resize", onResize);
+      if (frame) cancelAnimationFrame(frame);
     };
-  }, [settings.theme]);
+  }, [settings.theme, leftInset, rightInset, panelVisible, settings.railSide, selectedAccountId]);
 
   useEffect(() => {
     saveJson(LS_SETTINGS, settings);
@@ -665,6 +712,29 @@ export default function App() {
       blockTyping: settings.privacyBlockTyping,
     });
   }, [settings]);
+
+  useEffect(() => {
+    if (!settings.hideAccountPanel) setPanelPeek(false);
+  }, [settings.hideAccountPanel]);
+
+  // Đóng bảng profile của nhóm khi bấm ra ngoài hoặc nhấn Esc
+  useEffect(() => {
+    if (!railGroupMenu) return;
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest(".bch-rail-flyout") || el?.closest(".bch-rail-group-btn")) return;
+      setRailGroupMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRailGroupMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [railGroupMenu]);
 
   /* ------------------------------ Theme ------------------------------ */
   useEffect(() => {
@@ -999,6 +1069,8 @@ export default function App() {
     });
   }, [accounts, sidebarFilter]);
 
+  const pinnedAccounts = useMemo(() => accounts.filter((a) => a.pinned), [accounts]);
+
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.id === selectedAccountId) || null,
     [accounts, selectedAccountId]
@@ -1032,10 +1104,10 @@ export default function App() {
       profileId: selectedAccount.id,
       profileName: selectedAccount.name,
       // Phải cộng rail, nếu không WebView sẽ phủ lên 56px cuối sidebar (vùng nút tạo profile).
-      sidebarWidth: RAIL_WIDTH + SIDEBAR_WIDTH,
+      sidebarWidth: leftInset,
       webConfig: webConfigJson(selectedAccount),
     });
-  }, [anyModalOpen, selectedAccount, accountUrl, flashStatus, webConfigVersion]);
+  }, [anyModalOpen, selectedAccount, accountUrl, flashStatus, webConfigVersion, leftInset]);
 
   /* --------------------- Lắng nghe sự kiện từ WebView --------------------- */
   const accountsRef = useRef(accounts);
@@ -1271,7 +1343,19 @@ export default function App() {
   /* ------------------------------- Actions -------------------------------- */
   const selectAccount = useCallback(
     (acc: AccountProfile) => {
+      // Nếu profile vừa chọn không nằm trong bộ lọc đang bật (ví dụ: profile ghim
+      // Telegram/Zalo trong khi đang lọc theo một nhóm), bỏ lọc để lựa chọn không bị
+      // effect "đảm bảo tài khoản đang chọn nằm trong danh sách lọc" kéo ngược lại.
+      setSidebarFilter((prev) => {
+        if (prev.kind === "all") return prev;
+        const inFilter =
+          prev.kind === "platform"
+            ? acc.platformId === prev.id
+            : (acc.groupIds || []).includes(prev.id);
+        return inFilter ? prev : { kind: "all" };
+      });
       closeAllModals();
+      setPanelPeek(false);
       setSelectedAccountId(acc.id);
       setAlertToasts((prev) => prev.filter((t) => t.profileId !== acc.id));
     },
@@ -1780,7 +1864,7 @@ export default function App() {
 
   // Trong cửa sổ thông báo riêng, overlay phải bắt đầu từ mép trái (0),
   // nếu không sẽ bị lệch sang phải và che khuất nội dung.
-  const modalLeft = IS_NOTIF_WINDOW ? 0 : RAIL_WIDTH + SIDEBAR_WIDTH;
+  const modalInset = IS_NOTIF_WINDOW ? { left: 0, right: 0 } : { left: leftInset, right: rightInset };
 
   const renderAvatar = (acc: AccountProfile, size: "card" | "preview") => {
     const plat = getPlatform(acc.platformId);
@@ -1819,7 +1903,11 @@ export default function App() {
 
   /* -------------------------------- Render -------------------------------- */
   return (
-    <div className={`bch-shell ${IS_NOTIF_WINDOW ? "bch-notif-window" : ""}`}>
+    <div
+      className={`bch-shell ${IS_NOTIF_WINDOW ? "bch-notif-window" : ""} ${
+        settings.railSide === "right" ? "bch-rail-right" : ""
+      } ${panelVisible ? "" : "bch-panel-hidden"}`}
+    >
       <nav className="bch-rail" aria-label="Điều hướng chính">
         <div className="bch-rail-brand" title="Henry Chat Pro">
           <img src={logoUrl} alt="Henry Chat Pro" />
@@ -1828,8 +1916,17 @@ export default function App() {
           <button
             type="button"
             className={`bch-rail-btn ${sidebarFilter.kind === "all" ? "active" : ""}`}
-            title="Tất cả tài khoản"
+            title={
+              settings.hideAccountPanel
+                ? `${panelVisible ? "Ẩn" : "Hiện"} danh sách tài khoản`
+                : "Tất cả tài khoản"
+            }
             onClick={() => {
+              // Chế độ ẩn khung tài khoản: nút này bật/tắt tạm danh sách tài khoản.
+              if (settings.hideAccountPanel) {
+                setPanelPeek((prev) => !prev);
+                return;
+              }
               // Đóng mọi bảng đang mở để quay lại đúng khung chat
               closeAllModals();
               setSidebarFilter({ kind: "all" });
@@ -1837,20 +1934,65 @@ export default function App() {
           >
             💬
           </button>
+          {pinnedAccounts.length > 0 && (
+            <div className="bch-rail-pinned" aria-label="Profile đã ghim">
+              {pinnedAccounts.map((acc) => {
+                const plat = getPlatform(acc.platformId);
+                const unread = profileAlerts[acc.id]?.unreadCount || 0;
+                return (
+                  <button
+                    key={acc.id}
+                    type="button"
+                    className={`bch-rail-pin ${selectedAccountId === acc.id ? "active" : ""}`}
+                    title={`${acc.name} • ${plat.name}\nChuột phải: chỉnh sửa`}
+                    onClick={() => {
+                      setPanelPeek(false);
+                      selectAccount(acc);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      openEditAccount(acc);
+                    }}
+                  >
+                    {acc.avatarDataUrl ? (
+                      <img src={acc.avatarDataUrl} alt={acc.name} />
+                    ) : (
+                      <span style={{ backgroundColor: plat.color }}>
+                        {profileInitials(acc.name)}
+                      </span>
+                    )}
+                    {unread > 0 && (
+                      <span className="bch-rail-pin-badge">
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {groups.length > 0 && (
             <div className="bch-rail-groups">
               {groups.map((g) => {
                 const active = sidebarFilter.kind === "group" && sidebarFilter.id === g.id;
-                const count = accounts.filter((a) => (a.groupIds || []).includes(g.id)).length;
+                const members = accounts.filter((a) => (a.groupIds || []).includes(g.id));
                 return (
                   <button
                     key={g.id}
                     type="button"
                     className={`bch-rail-btn bch-rail-group-btn ${active ? "active" : ""}`}
-                    title={`Nhóm ${g.name} (${count})`}
-                    onClick={() => {
+                    title={`Nhóm ${g.name} (${members.length})\nBấm để xem profile trong nhóm`}
+                    onClick={(e) => {
                       closeAllModals();
-                      setSidebarFilter(active ? { kind: "all" } : { kind: "group", id: g.id });
+                      setSidebarFilter({ kind: "group", id: g.id });
+                      // Mở bảng chọn profile ngay cạnh thanh điều hướng.
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const maxTop = Math.max(10, window.innerHeight - 130 - members.length * 38);
+                      setRailGroupMenu((prev) =>
+                        prev && prev.id === g.id
+                          ? null
+                          : { id: g.id, top: Math.max(10, Math.min(rect.top - 8, maxTop)) }
+                      );
                     }}
                   >
                     <span
@@ -1864,6 +2006,79 @@ export default function App() {
               })}
             </div>
           )}
+          {railGroupMenu &&
+            (() => {
+              const group = groups.find((g) => g.id === railGroupMenu.id);
+              if (!group) return null;
+              const members = accounts.filter((a) => (a.groupIds || []).includes(group.id));
+              return (
+                <div
+                  className={`bch-rail-flyout ${
+                    settings.railSide === "right" ? "side-right" : ""
+                  }`}
+                  style={{ top: railGroupMenu.top }}
+                >
+                  <div className="bch-rail-flyout-head">
+                    <span
+                      className="bch-rail-flyout-dot"
+                      style={{ backgroundColor: group.color }}
+                    />
+                    <span className="bch-rail-flyout-title">{group.name}</span>
+                    <span className="bch-rail-flyout-count">{members.length}</span>
+                    <button
+                      type="button"
+                      className="bch-toast-close"
+                      onClick={() => setRailGroupMenu(null)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="bch-rail-flyout-list">
+                    {members.length === 0 && (
+                      <div className="bch-rail-flyout-empty">
+                        Nhóm chưa có profile. Bấm ✎ Sửa trên thẻ tài khoản để thêm vào nhóm.
+                      </div>
+                    )}
+                    {members.map((acc) => {
+                      const plat = getPlatform(acc.platformId);
+                      const unread = profileAlerts[acc.id]?.unreadCount || 0;
+                      return (
+                        <button
+                          key={acc.id}
+                          type="button"
+                          className={`bch-rail-flyout-item ${
+                            selectedAccountId === acc.id ? "active" : ""
+                          }`}
+                          onClick={() => {
+                            setRailGroupMenu(null);
+                            setPanelPeek(false);
+                            selectAccount(acc);
+                          }}
+                        >
+                          <span
+                            className="bch-rail-flyout-avatar"
+                            style={{ backgroundColor: acc.avatarDataUrl ? "transparent" : plat.color }}
+                          >
+                            {acc.avatarDataUrl ? (
+                              <img src={acc.avatarDataUrl} alt={acc.name} />
+                            ) : (
+                              profileInitials(acc.name)
+                            )}
+                          </span>
+                          <span className="bch-rail-flyout-name">{acc.name}</span>
+                          {acc.pinned ? <span className="bch-rail-flyout-pin">📌</span> : null}
+                          {unread > 0 && (
+                            <span className="bch-rail-flyout-badge">
+                              {unread > 99 ? "99+" : unread}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           <button
             type="button"
             className="bch-rail-btn"
@@ -2197,7 +2412,7 @@ export default function App() {
                         type="button"
                         className={`bch-action-btn icon-only ${acc.pinned ? "pinned" : ""}`}
                         onClick={() => togglePin(acc)}
-                        title="Ghim tài khoản lên đầu danh sách"
+                        title="Ghim profile lên thanh điều hướng"
                         data-tooltip={acc.pinned ? "Bỏ ghim" : "Ghim"}
                       >
                         {acc.pinned ? "📍" : "📌"}
@@ -2298,7 +2513,7 @@ export default function App() {
       {showAddAccount && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowAddAccount(false);
           }}
@@ -2468,7 +2683,7 @@ export default function App() {
       {showEditAccount && editingAccount && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowEditAccount(false);
           }}
@@ -2755,7 +2970,7 @@ export default function App() {
       {showAddPlatform && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowAddPlatform(false);
           }}
@@ -2877,7 +3092,7 @@ export default function App() {
       {showLan && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowLan(false);
           }}
@@ -2990,7 +3205,7 @@ export default function App() {
       {showSettings && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowSettings(false);
           }}
@@ -3034,6 +3249,43 @@ export default function App() {
                 >
                   🖥 Hệ thống
                 </button>
+              </div>
+              <div style={{ marginTop: 12, borderTop: "1px solid #334155", paddingTop: 10 }}>
+                <div style={{ fontSize: 12.5, color: "var(--bch-text-soft)", marginBottom: 8, fontWeight: 600 }}>
+                  Khu tài khoản
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--bch-text-soft)" }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.hideAccountPanel}
+                    onChange={(e) =>
+                      setSettings((prev) => ({ ...prev, hideAccountPanel: e.target.checked }))
+                    }
+                  />
+                  Ẩn toàn bộ khung tài khoản (chỉ còn thanh điều hướng)
+                </label>
+                <div style={{ fontSize: 11.5, color: "var(--bch-muted)", margin: "10px 0 6px" }}>
+                  Hướng hiển thị khu tài khoản
+                </div>
+                <div className="bch-footer-row" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                  <button
+                    type="button"
+                    className={`bch-btn ${settings.railSide === "left" ? "bch-btn-primary" : ""}`}
+                    onClick={() => setSettings((prev) => ({ ...prev, railSide: "left" }))}
+                  >
+                    ⬅️ Bên trái
+                  </button>
+                  <button
+                    type="button"
+                    className={`bch-btn ${settings.railSide === "right" ? "bch-btn-primary" : ""}`}
+                    onClick={() => setSettings((prev) => ({ ...prev, railSide: "right" }))}
+                  >
+                    Bên phải ➡️
+                  </button>
+                </div>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--bch-muted)", lineHeight: 1.45 }}>
+                  Khi ẩn khung tài khoản, bấm 💬 trên thanh điều hướng để mở tạm danh sách tài khoản.
+                </p>
               </div>
               <label
                 style={{
@@ -3215,7 +3467,7 @@ export default function App() {
       {showGroupManager && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowGroupManager(false);
           }}
@@ -3333,7 +3585,7 @@ export default function App() {
       {showInbox && (
         <div
           className="bch-inbox-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (!IS_NOTIF_WINDOW && e.target === e.currentTarget) closeInboxPanel();
           }}
@@ -3500,7 +3752,7 @@ export default function App() {
       {deleteTarget && (
         <div
           className="bch-modal-overlay"
-          style={{ left: modalLeft }}
+          style={modalInset}
           onClick={(e) => {
             if (e.target === e.currentTarget) setDeleteTarget(null);
           }}

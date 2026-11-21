@@ -81,6 +81,8 @@ pub struct WorkspaceState {
     pub window_op_lock: Mutex<()>,
     pub created_hwnds: Mutex<HashMap<String, isize>>,
     pub sidebar_logical_width: Mutex<f64>,
+    /// Phần chiều ngang chừa ở bên phải khung chat (khi rail/khung tài khoản nằm bên phải).
+    pub right_inset_logical: Mutex<f64>,
     pub last_bounds: Mutex<Option<(String, i32, i32, u32, u32)>>,
     pub profile_notify_enabled: Mutex<HashMap<String, bool>>,
     /// label cửa sổ chat -> thời điểm dùng gần nhất (epoch ms)
@@ -102,6 +104,7 @@ impl WorkspaceState {
             window_op_lock: Mutex::new(()),
             created_hwnds: Mutex::new(HashMap::new()),
             sidebar_logical_width: Mutex::new(DEFAULT_SIDEBAR_LOGICAL_WIDTH),
+            right_inset_logical: Mutex::new(0.0),
             last_bounds: Mutex::new(None),
             profile_notify_enabled: Mutex::new(HashMap::new()),
             last_used: Mutex::new(HashMap::new()),
@@ -1660,11 +1663,21 @@ fn sync_embedded_chat_bounds(app: &AppHandle, state: &Arc<WorkspaceState>) {
     };
 
     if let (Ok(inner_size), Ok(scale)) = (main_win.inner_size(), main_win.scale_factor()) {
-        let sidebar_px = (sidebar_logical_w * scale).round() as u32;
+        let right_logical_w = state
+            .right_inset_logical
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(0.0);
+        let left_px = (sidebar_logical_w * scale).round() as u32;
+        let right_px = (right_logical_w * scale).round() as u32;
         // Cửa sổ chat là CON của cửa sổ chính -> toạ độ tính theo vùng client của cha.
-        let chat_x = sidebar_px as i32;
+        let chat_x = left_px as i32;
         let chat_y = 0;
-        let chat_w = inner_size.width.saturating_sub(sidebar_px).max(200);
+        let chat_w = inner_size
+            .width
+            .saturating_sub(left_px)
+            .saturating_sub(right_px)
+            .max(200);
         let chat_h = inner_size.height.max(200);
 
         show_chat_window_at_bounds(
@@ -1694,6 +1707,25 @@ async fn set_sidebar_width(
     Ok(())
 }
 
+/// Đặt vùng chừa hai bên cho khung Chat (thanh điều hướng có thể ở trái hoặc phải,
+/// và khung tài khoản có thể bị ẩn hoàn toàn).
+#[tauri::command]
+async fn set_chat_insets(
+    app: AppHandle,
+    state: State<'_, Arc<WorkspaceState>>,
+    left: f64,
+    right: f64,
+) -> Result<(), String> {
+    if let Ok(mut guard) = state.sidebar_logical_width.lock() {
+        *guard = left.clamp(0.0, 2000.0);
+    }
+    if let Ok(mut guard) = state.right_inset_logical.lock() {
+        *guard = right.clamp(0.0, 2000.0);
+    }
+    sync_embedded_chat_bounds(&app, state.inner());
+    Ok(())
+}
+
 /// Chuyển tài khoản đang hiển thị ở khung Chat bên phải.
 /// Cửa sổ của từng tài khoản được tạo một lần, giữ nguyên phiên đăng nhập, chỉ ẩn/hiện.
 #[tauri::command]
@@ -1711,7 +1743,9 @@ async fn switch_active_chat_account(
 
     if let Some(w) = sidebar_width {
         if let Ok(mut guard) = state.sidebar_logical_width.lock() {
-            *guard = w.clamp(28.0, 500.0);
+            // Cho phép 0: khi thanh điều hướng nằm bên phải (hoặc khung tài khoản bị ẩn)
+            // thì khung chat phải bám sát mép trái cửa sổ, không chừa vệt trống.
+            *guard = w.clamp(0.0, 2000.0);
         }
     }
 
@@ -1769,8 +1803,18 @@ async fn switch_active_chat_account(
 
         if let Some(main_win) = app.get_webview_window("main") {
             if let (Ok(inner_size), Ok(scale)) = (main_win.inner_size(), main_win.scale_factor()) {
-                let sidebar_px = (sidebar_logical_w * scale).round() as u32;
-                let init_w = inner_size.width.saturating_sub(sidebar_px).max(200);
+                let right_logical_w = state
+                    .right_inset_logical
+                    .lock()
+                    .map(|g| *g)
+                    .unwrap_or(0.0);
+                let left_px = (sidebar_logical_w * scale).round() as u32;
+                let right_px = (right_logical_w * scale).round() as u32;
+                let init_w = inner_size
+                    .width
+                    .saturating_sub(left_px)
+                    .saturating_sub(right_px)
+                    .max(200);
                 let init_h = inner_size.height.max(200);
                 init_logical_w = (init_w as f64 / scale).max(200.0);
                 init_logical_h = (init_h as f64 / scale).max(200.0);
@@ -2830,6 +2874,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             set_sidebar_width,
+            set_chat_insets,
             switch_active_chat_account,
             open_chat_window,
             toggle_chat_window,
