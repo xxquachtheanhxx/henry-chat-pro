@@ -1439,14 +1439,13 @@ fn build_injection_script(
 ) -> String {
     let notify_script = build_notify_call_monitor_script(platform, profile_id, notify_enabled);
     let mut script = notify_script;
-    // Privacy interceptor (chặn đã đọc / đang gõ) — chỉ bật khi có cấu hình.
-    if privacy.block_read_receipts || privacy.block_typing {
-        script = format!(
-            "{}\n{}",
-            script,
-            build_privacy_script(platform, privacy.block_read_receipts, privacy.block_typing)
-        );
-    }
+    // Privacy interceptor (chặn đã đọc / đang gõ): luôn cài, không làm gì khi đang tắt,
+    // để bật trong Cài đặt có hiệu lực ngay mà không phải tải lại tài khoản.
+    script = format!(
+        "{}\n{}",
+        script,
+        build_privacy_script(platform, privacy.block_read_receipts, privacy.block_typing)
+    );
     if platform == "telegram" {
         // Tạm tắt script media viewer (có thể gây lỗi gửi tin vào nhóm). Bật lại sau khi xác nhận.
         let telegram_media_fix_enabled: bool = false;
@@ -1523,6 +1522,21 @@ fn evict_idle_webviews(app: &AppHandle, state: &Arc<WorkspaceState>) {
         if let Ok(mut m) = state.label_profile.lock() {
             m.remove(&label);
         }
+    }
+}
+
+/// `platform` và `profile_id` được ghép thẳng vào đường dẫn `chat_profiles/<platform>/<profile_id>`:
+/// chỉ nhận chữ, số, `_`, `-` để không thể trỏ ra ngoài thư mục dữ liệu (`..`, `\`, `/`, `C:`).
+fn validate_profile_ref(platform: &str, profile_id: &str) -> Result<(), String> {
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 80
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if ok(platform) && ok(profile_id) {
+        Ok(())
+    } else {
+        Err("Mã nền tảng hoặc mã tài khoản không hợp lệ".to_string())
     }
 }
 
@@ -1909,6 +1923,7 @@ async fn switch_active_chat_account(
     }
 
     if app.get_webview_window(&target_label).is_none() {
+        validate_profile_ref(&platform, &profile_id)?;
         let app_data_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
         let profile_dir = app_data_dir
             .join("chat_profiles")
@@ -2044,7 +2059,12 @@ async fn switch_active_chat_account(
 
         let notify_enabled = state.is_profile_notify_enabled(&profile_id);
         let script_platform = if is_telegram { "telegram" } else { platform.as_str() };
-        let profile_privacy = profile_web.privacy.clone();
+        // Cài đặt chung (Cài đặt > Riêng tư) cộng với cài đặt riêng của tài khoản.
+        let (global_read, global_typing) =
+            state.privacy_mode.lock().map(|g| *g).unwrap_or((false, false));
+        let mut profile_privacy = profile_web.privacy.clone();
+        profile_privacy.block_read_receipts |= global_read;
+        profile_privacy.block_typing |= global_typing;
         let mut script = build_injection_script(
             script_platform,
             &profile_id,
@@ -2345,8 +2365,7 @@ fn build_reply_script(platform: &str, text: &str, send: bool) -> String {
         .replace("@@SEND@@", if send { "true" } else { "false" })
 }
 
-/// Điền (và tuỳ chọn gửi) một tin nhắn vào ô soạn thảo của khung chat đang mở.
-/// `send = false` chỉ điền để người dùng tự kiểm tra trước khi gửi.
+/// Điền một tin nhắn vào ô soạn thảo của khung chat đang mở; người dùng tự kiểm tra rồi gửi.
 #[tauri::command]
 async fn send_chat_message(
     app: AppHandle,
@@ -2366,9 +2385,11 @@ async fn send_chat_message(
     let Some(win) = app.get_webview_window(&label) else {
         return Err("Khung chat chưa mở — hãy mở tài khoản trước khi trả lời".to_string());
     };
-    let js = build_reply_script(&platform, &trimmed, send);
+    // Không tự nhấn Enter: ô soạn thuộc cuộc trò chuyện đang mở, có thể không phải người vừa nhắn.
+    let _ = send;
+    let js = build_reply_script(&platform, &trimmed, false);
     win.eval(&js).map_err(|e| e.to_string())?;
-    Ok(if send { "sent" } else { "filled" }.to_string())
+    Ok("filled".to_string())
 }
 
 /// Kiểm tra proxy của profile: kết nối tới `api.ipify.org` qua proxy và trả về IP công khai.
@@ -2435,6 +2456,7 @@ async fn delete_chat_profile_completely(
     platform: String,
     profile_id: String,
 ) -> Result<String, String> {
+    validate_profile_ref(&platform, &profile_id)?;
     {
         let _op_guard = state.window_op_lock.lock().map_err(|e| e.to_string())?;
         let label = make_window_label(&platform, &profile_id);
@@ -2642,25 +2664,23 @@ async fn open_app_data_folder(app: AppHandle) -> Result<String, String> {
 /// Mở URL bằng trình duyệt hệ thống (dự phòng khi một website chặn nhúng / cần đăng nhập khác).
 #[tauri::command]
 async fn open_system_browser(url: String) -> Result<(), String> {
+    // Chỉ mở liên kết web: `rundll32 url.dll` chạy được cả `file:`, đường dẫn .exe, giao thức lạ.
+    let parsed = tauri::Url::parse(url.trim()).map_err(|_| "Liên kết không hợp lệ".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("Chỉ mở được liên kết http/https".to_string());
+    }
+    let safe_url = parsed.to_string();
     #[cfg(target_os = "windows")]
     {
         // Dùng rundll32 thay vì `cmd /c start` vì cmd.exe cắt URL tại dấu `&`
-        let spawned = std::process::Command::new("rundll32.exe")
-            .args(["url.dll,FileProtocolHandler", &url])
-            .spawn();
-
-        if spawned.is_err() {
-            let escaped = url.replace('\'', "''");
-            let _ = std::process::Command::new("powershell")
-                .args([
-                    "-NoProfile",
-                    "-WindowStyle",
-                    "Hidden",
-                    "-Command",
-                    &format!("Start-Process '{}'", escaped),
-                ])
-                .spawn();
-        }
+        std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", &safe_url])
+            .spawn()
+            .map_err(|e| format!("Không mở được trình duyệt: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = safe_url;
     }
     Ok(())
 }
@@ -2671,14 +2691,22 @@ async fn confirm_and_exit_app(
     app: AppHandle,
     state: State<'_, Arc<WorkspaceState>>,
 ) -> Result<(), String> {
+    exit_app_gracefully(&app, state.inner());
+    Ok(())
+}
+
+fn exit_app_gracefully(app: &AppHandle, state: &Arc<WorkspaceState>) {
     if let Ok(mut guard) = state.allow_exit.lock() {
+        if *guard {
+            return;
+        }
         *guard = true;
     }
     // Ẩn cửa sổ trước khi đóng WebView con để không lộ khung trắng trong lúc teardown.
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.hide();
     }
-    hide_all_chat_windows_everywhere(&app, state.inner());
+    hide_all_chat_windows_everywhere(app, state);
     for (label, win) in app.webview_windows() {
         if label != "main" {
             let _ = win.close();
@@ -2691,7 +2719,6 @@ async fn confirm_and_exit_app(
         std::thread::sleep(Duration::from_millis(1200));
         app_for_exit.exit(0);
     });
-    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -3064,11 +3091,9 @@ pub fn run() {
                                 );
                             }
                         } else {
-                            hide_all_chat_windows_everywhere(
-                                window.app_handle(),
-                                &state_for_event,
-                            );
-                            let _ = window.hide();
+                            // Thoát hẳn: đóng WebView con rồi chờ WebView2 ghi phiên đăng nhập xuống đĩa.
+                            api.prevent_close();
+                            exit_app_gracefully(window.app_handle(), &state_for_event);
                         }
                     }
                     _ => {}
@@ -3194,10 +3219,20 @@ fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) ->
                 XMLHttpRequest.prototype.send = function(body) {{
                     try {{
                         if (isBlocked(this.__bch_url, body)) {{
-                            // Giả lập thành công
+                            // Giả lập thành công, và báo hoàn tất để trang không chờ mãi.
+                            const xhr = this;
                             try {{
-                                Object.defineProperty(this, 'status', {{ value: 200, writable: true }});
+                                Object.defineProperty(xhr, 'readyState', {{ value: 4, configurable: true }});
+                                Object.defineProperty(xhr, 'status', {{ value: 200, configurable: true }});
+                                Object.defineProperty(xhr, 'statusText', {{ value: 'OK', configurable: true }});
+                                Object.defineProperty(xhr, 'responseText', {{ value: '{{}}', configurable: true }});
+                                Object.defineProperty(xhr, 'response', {{ value: '{{}}', configurable: true }});
                             }} catch (e) {{}}
+                            setTimeout(function () {{
+                                try {{ xhr.dispatchEvent(new Event('readystatechange')); }} catch (e) {{}}
+                                try {{ xhr.dispatchEvent(new ProgressEvent('load')); }} catch (e) {{}}
+                                try {{ xhr.dispatchEvent(new ProgressEvent('loadend')); }} catch (e) {{}}
+                            }}, 0);
                             return;
                         }}
                     }} catch (e) {{}}
