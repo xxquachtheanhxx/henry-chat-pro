@@ -1765,6 +1765,11 @@ export default function App() {
     }
     setReplyTargetId(null);
     setReplyText("");
+    if (IS_NOTIF_WINDOW) {
+      // Cửa sổ thông báo riêng: để cửa sổ chính mở tài khoản, không tự xoá bảng thông báo.
+      void callTauri("open_profile_from_notification", { profileId: acc.id });
+      return;
+    }
     setShowInbox(false);
     selectAccount(acc);
     flashStatus(`📝 Đã điền vào ô chat của "${acc.name}" — kiểm tra đúng người nhận rồi nhấn Enter`);
