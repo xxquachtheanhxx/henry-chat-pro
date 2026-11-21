@@ -1501,16 +1501,19 @@ fn set_webview_power(win: &tauri::WebviewWindow, sleep: bool, low_memory: bool) 
         let Ok(core) = controller.CoreWebView2() else {
             return;
         };
-        if let Ok(core19) = core.cast::<ICoreWebView2_19>() {
-            let level = if low_memory {
-                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
-            } else {
-                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
-            };
-            let _ = core19.SetMemoryUsageTargetLevel(level);
-        }
+        let set_memory_level = || {
+            if let Ok(core19) = core.cast::<ICoreWebView2_19>() {
+                let level = if low_memory {
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+                } else {
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+                };
+                let _ = core19.SetMemoryUsageTargetLevel(level);
+            }
+        };
         let core3 = core.cast::<ICoreWebView2_3>().ok();
         if sleep {
+            set_memory_level();
             let _ = controller.SetIsVisible(false);
             if let Some(core3) = core3 {
                 let handler =
@@ -1518,10 +1521,12 @@ fn set_webview_power(win: &tauri::WebviewWindow, sleep: bool, low_memory: bool) 
                 let _ = core3.TrySuspend(&handler);
             }
         } else {
+            // Resume đặt lại mức bộ nhớ về Normal, nên phải đặt mức sau khi đã đánh thức.
             let _ = controller.SetIsVisible(true);
             if let Some(core3) = core3 {
                 let _ = core3.Resume();
             }
+            set_memory_level();
         }
     });
 }
