@@ -3,18 +3,28 @@
 //! - UDP broadcast cổng 47821 để tìm thiết bị (mỗi 3 giây, quên sau 12 giây).
 //! - TCP listener cổng ngẫu nhiên để nhận dữ liệu.
 //! - Header JSON 1 dòng, sau đó là payload (text hoặc bytes của file).
+//! - Chỉ chạy khi người dùng mở panel LAN (`lan_start`).
+//! - Bên nhận chỉ chấp nhận khi header mang đúng mã ghép đôi; trả về 1 dòng `OK`/`ERR ...`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 pub const DISCOVERY_PORT: u16 = 47821;
-const PROTO_VERSION: u32 = 1;
+const PROTO_VERSION: u32 = 2;
+// Đủ cho MAX_TEXT_CHARS ký tự Unicode sau khi JSON-escape (tối đa 6 byte/ký tự).
+const MAX_HEADER_BYTES: u64 = 64 * 1024;
+const MAX_TEXT_CHARS: usize = 8 * 1024;
+pub const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_CONCURRENT_CONNS: usize = 4;
+const MIN_PAIR_CODE_LEN: usize = 6;
+static PART_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LanPeer {
@@ -38,6 +48,8 @@ pub struct LanState {
     pub peers: Mutex<HashMap<String, (LanPeer, Instant)>>,
     pub tcp_port: Mutex<u16>,
     pub started: Mutex<bool>,
+    pub pair_code: Mutex<String>,
+    active_conns: AtomicUsize,
 }
 
 impl LanState {
@@ -57,6 +69,8 @@ impl LanState {
             peers: Mutex::new(HashMap::new()),
             tcp_port: Mutex::new(0),
             started: Mutex::new(false),
+            pair_code: Mutex::new(String::new()),
+            active_conns: AtomicUsize::new(0),
         }
     }
 }
@@ -79,6 +93,26 @@ fn peers_list(state: &LanState) -> Vec<LanPeer> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn current_pair_code(state: &LanState) -> String {
+    state.pair_code.lock().map(|c| c.clone()).unwrap_or_default()
+}
+
+fn codes_match(expected: &str, given: &str) -> bool {
+    let (a, b) = (expected.as_bytes(), given.as_bytes());
+    if a.is_empty() || a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+struct ConnGuard(Arc<LanState>);
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.0.active_conns.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn find_peer(state: &LanState, peer_id: &str) -> Result<LanPeer, String> {
@@ -119,7 +153,14 @@ pub fn start(app: AppHandle, state: Arc<LanState>) {
             if let Ok(stream) = stream {
                 let app = accept_app.clone();
                 let state = Arc::clone(&accept_state);
-                std::thread::spawn(move || handle_conn(app, stream, state));
+                if state.active_conns.fetch_add(1, Ordering::SeqCst) >= MAX_CONCURRENT_CONNS {
+                    state.active_conns.fetch_sub(1, Ordering::SeqCst);
+                    continue;
+                }
+                std::thread::spawn(move || {
+                    let _guard = ConnGuard(Arc::clone(&state));
+                    handle_conn(app, stream, state);
+                });
             }
         }
     });
@@ -127,35 +168,49 @@ pub fn start(app: AppHandle, state: Arc<LanState>) {
     std::thread::spawn(move || discovery_loop(app, state));
 }
 
-fn handle_conn(app: AppHandle, stream: TcpStream, _state: Arc<LanState>) {
+fn reply(mut stream: &TcpStream, msg: &str) {
+    let _ = stream.write_all(msg.as_bytes());
+    let _ = stream.write_all(b"\n");
+    let _ = stream.flush();
+}
+
+fn handle_conn(app: AppHandle, stream: TcpStream, state: Arc<LanState>) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
     let clone = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     };
     let mut reader = BufReader::new(clone);
     let mut header = String::new();
-    if reader.read_line(&mut header).is_err() {
-        return;
+    match (&mut reader).take(MAX_HEADER_BYTES).read_line(&mut header) {
+        Ok(_) if header.ends_with('\n') => {}
+        _ => return reply(&stream, "ERR header"),
     }
     let v: serde_json::Value = match serde_json::from_str(header.trim()) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(_) => return reply(&stream, "ERR header"),
     };
+    let given_code = v.get("code").and_then(|k| k.as_str()).unwrap_or("");
+    if !codes_match(&current_pair_code(&state), given_code) {
+        return reply(&stream, "ERR code");
+    }
     let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-    let from = v
+    let from: String = v
         .get("from")
         .and_then(|k| k.as_str())
         .unwrap_or("Thiết bị")
-        .to_string();
+        .chars()
+        .take(48)
+        .collect();
     let at = now_ms();
 
     if kind == "text" {
-        let text = v
-            .get("text")
-            .and_then(|k| k.as_str())
-            .unwrap_or("")
-            .to_string();
+        let text = v.get("text").and_then(|k| k.as_str()).unwrap_or("");
+        if text.chars().count() > MAX_TEXT_CHARS {
+            return reply(&stream, "ERR size");
+        }
+        reply(&stream, "OK");
         let _ = app.emit(
             "bch-lan-message",
             serde_json::json!({ "from": from, "text": text, "at": at }),
@@ -163,28 +218,39 @@ fn handle_conn(app: AppHandle, stream: TcpStream, _state: Arc<LanState>) {
     } else if kind == "file" {
         let name = sanitize_name(v.get("name").and_then(|k| k.as_str()).unwrap_or("file"));
         let size = v.get("size").and_then(|k| k.as_u64()).unwrap_or(0);
+        if size == 0 || size > MAX_FILE_BYTES {
+            return reply(&stream, "ERR size");
+        }
         let dir = download_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let path = unique_path(&dir, &name);
-        let mut out = match std::fs::File::create(&path) {
+        let seq = PART_SEQ.fetch_add(1, Ordering::SeqCst);
+        let part = dir.join(format!(".henry-lan-{at}-{seq}.part"));
+        let mut out = match std::fs::File::create(&part) {
             Ok(f) => f,
-            Err(_) => return,
+            Err(_) => return reply(&stream, "ERR io"),
         };
         let mut limited = reader.take(size);
-        if std::io::copy(&mut limited, &mut out).is_err() {
-            return;
-        }
-        let _ = out.flush();
+        let copied = std::io::copy(&mut limited, &mut out);
+        let complete = matches!(copied, Ok(n) if n == size) && out.flush().is_ok();
+        drop(out);
+        let path = if complete { reserve_unique_path(&dir, &name) } else { None };
+        let Some(path) = path.filter(|p| std::fs::rename(&part, p).is_ok()) else {
+            let _ = std::fs::remove_file(&part);
+            return reply(&stream, "ERR io");
+        };
+        reply(&stream, "OK");
         let _ = app.emit(
             "bch-lan-file",
             serde_json::json!({
                 "from": from,
-                "name": name,
+                "name": path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(name),
                 "path": path.to_string_lossy(),
                 "size": size,
                 "at": at
             }),
         );
+    } else {
+        reply(&stream, "ERR kind");
     }
 }
 
@@ -274,22 +340,26 @@ fn sanitize_name(name: &str) -> String {
     }
 }
 
-fn unique_path(dir: &PathBuf, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
+/// Chọn tên chưa tồn tại và tạo file rỗng ngay (`create_new`) để 2 lượt nhận song song
+/// không chọn trùng đích rồi ghi đè lên nhau.
+fn reserve_unique_path(dir: &PathBuf, name: &str) -> Option<PathBuf> {
     let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (name.to_string(), String::new()),
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.to_string(), String::new()),
     };
-    for i in 1..10000 {
-        let p = dir.join(format!("{stem} ({i}){ext}"));
-        if !p.exists() {
-            return p;
+    for i in 0..10000 {
+        let candidate = if i == 0 {
+            dir.join(name)
+        } else {
+            dir.join(format!("{stem} ({i}){ext}"))
+        };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(_) => return Some(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
         }
     }
-    candidate
+    None
 }
 
 fn download_dir() -> PathBuf {
@@ -373,13 +443,18 @@ pub async fn lan_send_text(
         .lock()
         .map(|n| n.clone())
         .unwrap_or_default();
-    let mut stream = TcpStream::connect((peer.ip.as_str(), peer.port))
-        .map_err(|e| format!("Không kết nối được tới {}: {e}", peer.name))?;
-    let line = serde_json::json!({ "kind": "text", "from": from, "text": text }).to_string();
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return Err(format!("Tin nhắn dài quá {MAX_TEXT_CHARS} ký tự"));
+    }
+    let code = require_pair_code(&state)?;
+    let mut stream = connect_peer(&peer)?;
+    let line = serde_json::json!({ "kind": "text", "from": from, "text": text, "code": code })
+        .to_string();
     stream
         .write_all(line.as_bytes())
         .and_then(|_| stream.write_all(b"\n"))
         .map_err(|e| format!("Gửi thất bại: {e}"))?;
+    read_reply(&stream, &peer)?;
     Ok(true)
 }
 
@@ -394,19 +469,23 @@ pub async fn lan_send_file(
     if bytes.is_empty() {
         return Err("File rỗng".to_string());
     }
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("File lớn hơn 100 MB".to_string());
+    }
+    let code = require_pair_code(&state)?;
     let peer = find_peer(&state, &peer_id)?;
     let from = state
         .device_name
         .lock()
         .map(|n| n.clone())
         .unwrap_or_default();
-    let mut stream = TcpStream::connect((peer.ip.as_str(), peer.port))
-        .map_err(|e| format!("Không kết nối được tới {}: {e}", peer.name))?;
+    let mut stream = connect_peer(&peer)?;
     let header = serde_json::json!({
         "kind": "file",
         "from": from,
         "name": sanitize_name(&name),
-        "size": bytes.len()
+        "size": bytes.len(),
+        "code": code
     })
     .to_string();
     stream
@@ -414,5 +493,61 @@ pub async fn lan_send_file(
         .and_then(|_| stream.write_all(b"\n"))
         .and_then(|_| stream.write_all(&bytes))
         .map_err(|e| format!("Gửi file thất bại: {e}"))?;
+    read_reply(&stream, &peer)?;
     Ok(true)
+}
+
+fn require_pair_code(state: &LanState) -> Result<String, String> {
+    let code = current_pair_code(state);
+    if code.is_empty() {
+        return Err("Chưa đặt mã ghép đôi LAN".to_string());
+    }
+    Ok(code)
+}
+
+fn connect_peer(peer: &LanPeer) -> Result<TcpStream, String> {
+    let addr: std::net::SocketAddr = format!("{}:{}", peer.ip, peer.port)
+        .parse()
+        .map_err(|_| format!("Địa chỉ không hợp lệ: {}", peer.ip))?;
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+        .map_err(|e| format!("Không kết nối được tới {}: {e}", peer.name))?;
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
+    Ok(stream)
+}
+
+fn read_reply(stream: &TcpStream, peer: &LanPeer) -> Result<(), String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    let mut line = String::new();
+    BufReader::new(stream)
+        .take(256)
+        .read_line(&mut line)
+        .map_err(|e| format!("{} không phản hồi: {e}", peer.name))?;
+    match line.trim() {
+        "OK" => Ok(()),
+        "ERR code" => Err(format!("Mã ghép đôi không khớp với {}", peer.name)),
+        "ERR size" => Err(format!("{} từ chối: dữ liệu quá lớn", peer.name)),
+        "" => Err(format!("{} không phản hồi (có thể đang dùng bản cũ)", peer.name)),
+        other => Err(format!("{} từ chối: {other}", peer.name)),
+    }
+}
+
+#[tauri::command]
+pub async fn lan_start(app: AppHandle, state: State<'_, Arc<LanState>>) -> Result<bool, String> {
+    start(app, Arc::clone(&state));
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn lan_set_pair_code(
+    state: State<'_, Arc<LanState>>,
+    code: String,
+) -> Result<(), String> {
+    let trimmed = code.trim();
+    if !trimmed.is_empty() && trimmed.chars().count() < MIN_PAIR_CODE_LEN {
+        return Err(format!("Mã ghép đôi cần ít nhất {MIN_PAIR_CODE_LEN} ký tự"));
+    }
+    if let Ok(mut c) = state.pair_code.lock() {
+        *c = trimmed.chars().take(64).collect();
+    }
+    Ok(())
 }

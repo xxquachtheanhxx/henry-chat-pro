@@ -206,6 +206,7 @@ const LS_SELECTED = "bch_pro_selected_account_v1";
 /** Profile đã bị người dùng xoá hẳn — không tự khôi phục lại từ đĩa. */
 const LS_DELETED = "bch_pro_deleted_profiles_v1";
 const LS_NOTIF = "bch_pro_notification_log_v1";
+const LS_LAN_CODE = "bch_pro_lan_pair_code_v1";
 const MAX_NOTIFICATIONS = 60;
 
 const DEFAULT_PLATFORMS: PlatformItem[] = [
@@ -761,6 +762,8 @@ export default function App() {
   const [lanFeed, setLanFeed] = useState<LanFeedItem[]>([]);
   const [lanSending, setLanSending] = useState(false);
   const [lanDeviceName, setLanDeviceName] = useState("");
+  const [lanCode, setLanCode] = useState(() => localStorage.getItem(LS_LAN_CODE) || "");
+  const lanStartedRef = useRef(false);
 
   useEffect(() => {
     if (!TAURI_READY) return;
@@ -807,16 +810,37 @@ export default function App() {
       .then((fn) => (cancelled ? fn() : unlisteners.push(fn)))
       .catch(() => {});
 
-    void callTauri<string>("lan_get_device_name").then((n) => {
-      if (n) setLanDeviceName(n);
-    });
-    void callTauri<LanPeer[]>("lan_list_peers").then((p) => setLanPeers(p || []));
-
     return () => {
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
   }, [flashStatus]);
+
+  // LAN chỉ chạy (mở cổng TCP + broadcast) khi người dùng mở panel lần đầu.
+  useEffect(() => {
+    if (!TAURI_READY || !showLan || lanStartedRef.current) return;
+    lanStartedRef.current = true;
+    void (async () => {
+      const saved = localStorage.getItem(LS_LAN_CODE) || "";
+      if (saved) await callTauri("lan_set_pair_code", { code: saved });
+      await callTauri("lan_start");
+      const n = await callTauri<string>("lan_get_device_name");
+      if (n) setLanDeviceName(n);
+      const p = await callTauri<LanPeer[]>("lan_list_peers");
+      setLanPeers(p || []);
+    })();
+  }, [showLan]);
+
+  const saveLanCode = async () => {
+    const code = lanCode.trim();
+    try {
+      await invoke("lan_set_pair_code", { code });
+      localStorage.setItem(LS_LAN_CODE, code);
+      flashStatus(code ? "🔒 Đã lưu mã ghép đôi LAN" : "🔒 Đã xoá mã — máy này sẽ từ chối mọi dữ liệu LAN");
+    } catch (err) {
+      flashStatus(`⚠️ ${String(err)}`);
+    }
+  };
 
   const saveLanDeviceName = async () => {
     const name = lanDeviceName.trim();
@@ -829,14 +853,13 @@ export default function App() {
     if (!lanPeerId || !lanText.trim()) return;
     const target = lanPeers.find((p) => p.id === lanPeerId);
     setLanSending(true);
-    const res = await callTauri("lan_send_text", {
-      peerId: lanPeerId,
-      text: lanText.trim(),
-    });
-    setLanSending(false);
-    if (res === null) {
-      flashStatus("⚠️ Không gửi được — thiết bị có thể đã offline");
+    try {
+      await invoke("lan_send_text", { peerId: lanPeerId, text: lanText.trim() });
+    } catch (err) {
+      flashStatus(`⚠️ Không gửi được: ${String(err)}`);
       return;
+    } finally {
+      setLanSending(false);
     }
     setLanFeed((prev) =>
       [
@@ -859,8 +882,8 @@ export default function App() {
       flashStatus("⚠️ Chọn thiết bị nhận trước khi gửi file");
       return;
     }
-    if (file.size > 80 * 1024 * 1024) {
-      flashStatus("⚠️ File lớn hơn 80 MB chưa được hỗ trợ");
+    if (file.size > 100 * 1024 * 1024) {
+      flashStatus("⚠️ File lớn hơn 100 MB chưa được hỗ trợ");
       return;
     }
     const target = lanPeers.find((p) => p.id === lanPeerId);
@@ -869,15 +892,13 @@ export default function App() {
       const raw = String(reader.result || "");
       const b64 = raw.slice(raw.indexOf(",") + 1);
       setLanSending(true);
-      const res = await callTauri("lan_send_file", {
-        peerId: lanPeerId,
-        name: file.name,
-        dataBase64: b64,
-      });
-      setLanSending(false);
-      if (res === null) {
-        flashStatus("⚠️ Gửi file thất bại — thiết bị có thể đã offline");
+      try {
+        await invoke("lan_send_file", { peerId: lanPeerId, name: file.name, dataBase64: b64 });
+      } catch (err) {
+        flashStatus(`⚠️ Gửi file thất bại: ${String(err)}`);
         return;
+      } finally {
+        setLanSending(false);
       }
       setLanFeed((prev) =>
         [
@@ -3135,6 +3156,25 @@ export default function App() {
                 </button>
               </div>
 
+              <div className="bch-lan-row">
+                <input
+                  className="bch-input"
+                  type="password"
+                  value={lanCode}
+                  onChange={(e) => setLanCode(e.target.value)}
+                  placeholder="Mã ghép đôi (≥ 6 ký tự, giống nhau trên các máy)"
+                  autoComplete="off"
+                />
+                <button type="button" className="bch-btn" onClick={() => void saveLanCode()}>
+                  Lưu mã
+                </button>
+              </div>
+              {!lanCode.trim() ? (
+                <p style={{ margin: 0, fontSize: 11.5, color: "var(--bch-muted)" }}>
+                  🔒 Chưa có mã ghép đôi: máy này không gửi và không nhận dữ liệu LAN.
+                </p>
+              ) : null}
+
               <select
                 className="bch-select"
                 value={lanPeerId}
@@ -3172,7 +3212,7 @@ export default function App() {
               </div>
 
               <label className="bch-lan-file">
-                📎 Gửi file (tối đa 80 MB)
+                📎 Gửi file (tối đa 100 MB)
                 <input
                   type="file"
                   style={{ display: "none" }}
