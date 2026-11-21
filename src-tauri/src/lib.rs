@@ -148,6 +148,62 @@ impl WorkspaceState {
         }
         if let Some(app) = self.app_handle.lock().ok().and_then(|g| g.clone()) {
             let _ = app.emit_to("main", "bch-profile-event", &event);
+            self.alert_outside_app(&app, &event);
+        }
+    }
+
+    /// Cửa sổ chính đang nằm dưới khay hoặc không được chọn thì giao diện trong app không ai thấy:
+    /// báo ở cấp hệ điều hành (balloon ở khay / nhấp nháy nút trên taskbar).
+    fn alert_outside_app(&self, app: &AppHandle, event: &ProfileAlertEvent) {
+        let is_call = event.kind == "call_start";
+        if !(is_call || event.kind == "message")
+            || !self.is_profile_notify_enabled(&event.profile_id)
+        {
+            return;
+        }
+        let Some(main) = app.get_webview_window("main") else {
+            return;
+        };
+        if main.is_visible().unwrap_or(true) && !main.is_minimized().unwrap_or(false) {
+            if !main.is_focused().unwrap_or(true) {
+                let _ = main.request_user_attention(Some(if is_call {
+                    tauri::UserAttentionType::Critical
+                } else {
+                    tauri::UserAttentionType::Informational
+                }));
+            }
+            return;
+        }
+        if main.is_minimized().unwrap_or(false) {
+            let _ = main.request_user_attention(Some(if is_call {
+                tauri::UserAttentionType::Critical
+            } else {
+                tauri::UserAttentionType::Informational
+            }));
+            return;
+        }
+        // Tin nhắn dồn dập: tối đa 1 balloon mỗi 5 giây. Cuộc gọi thì luôn báo.
+        static LAST_BALLOON_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = current_epoch_ms();
+        let last = LAST_BALLOON_MS.load(std::sync::atomic::Ordering::Relaxed);
+        if !is_call && now.saturating_sub(last) < 5000 {
+            return;
+        }
+        LAST_BALLOON_MS.store(now, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(target_os = "windows")]
+        {
+            let (title, body) = if is_call {
+                (
+                    "📞 Cuộc gọi đến".to_string(),
+                    if event.caller.is_empty() { "Mở Henry Chat Pro để nghe máy".to_string() } else { event.caller.clone() },
+                )
+            } else {
+                (
+                    if event.title.is_empty() { "Tin nhắn mới".to_string() } else { event.title.clone() },
+                    event.body.clone(),
+                )
+            };
+            show_tray_balloon(app, &title, &body);
         }
     }
 
@@ -2472,7 +2528,45 @@ fn reveal_main_window(app: &AppHandle, state: &Arc<WorkspaceState>) {
         *lb = None;
     }
     sync_embedded_chat_bounds(app, state);
+
+    // Cửa sổ chính vừa hiện lại có thể chưa ổn định kích thước/tiêu điểm, và WebView2 của khung
+    // chat có thể còn giữ bề mặt trống từ lúc cha bị ẩn: đặt lại vài lần và ép vẽ lại.
+    let app_clone = app.clone();
+    let state_clone = Arc::clone(state);
+    std::thread::spawn(move || {
+        for delay_ms in [150u64, 450, 1200] {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            let visible = app_clone
+                .get_webview_window("main")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
+            if !visible {
+                return;
+            }
+            let active = state_clone.active_chat_label.lock().ok().and_then(|g| g.clone());
+            if let Some(win) = active.and_then(|l| app_clone.get_webview_window(&l)) {
+                repaint_webview(&win);
+            }
+            if let Ok(mut lb) = state_clone.last_bounds.lock() {
+                *lb = None;
+            }
+            sync_embedded_chat_bounds(&app_clone, &state_clone);
+        }
+    });
 }
+
+/// Ép WebView2 vẽ lại bằng cách tắt/bật `IsVisible` của controller.
+#[cfg(target_os = "windows")]
+fn repaint_webview(win: &tauri::WebviewWindow) {
+    let _ = win.with_webview(|pw| unsafe {
+        let controller = pw.controller();
+        let _ = controller.SetIsVisible(false);
+        let _ = controller.SetIsVisible(true);
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn repaint_webview(_win: &tauri::WebviewWindow) {}
 
 #[tauri::command]
 async fn set_sleep_hidden_profiles(
