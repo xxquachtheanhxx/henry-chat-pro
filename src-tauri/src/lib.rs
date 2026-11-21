@@ -92,6 +92,10 @@ pub struct WorkspaceState {
     pub minimize_to_tray: Mutex<bool>,
     pub tray_profiles: Mutex<Vec<(String, String, String)>>, // (id, name, platform_name)
     pub privacy_mode: Mutex<(bool, bool)>, // (block_read_receipts, block_typing)
+    /// Cho mọi tài khoản bị ẩn "ngủ" (TrySuspend). Tắt thì chỉ tài khoản tắt thông báo mới ngủ.
+    pub sleep_hidden_profiles: Mutex<bool>,
+    /// label cửa sổ chat -> profile_id
+    pub label_profile: Mutex<HashMap<String, String>>,
 }
 
 impl WorkspaceState {
@@ -112,6 +116,8 @@ impl WorkspaceState {
             minimize_to_tray: Mutex::new(true),
             tray_profiles: Mutex::new(Vec::new()),
             privacy_mode: Mutex::new((false, false)),
+            sleep_hidden_profiles: Mutex::new(false),
+            label_profile: Mutex::new(HashMap::new()),
         }
     }
 
@@ -121,6 +127,19 @@ impl WorkspaceState {
             .ok()
             .and_then(|m| m.get(profile_id).copied())
             .unwrap_or(true)
+    }
+
+    /// Tài khoản bị ẩn có được "ngủ" không: luôn ngủ nếu tắt thông báo, còn lại theo cài đặt.
+    pub fn should_sleep_hidden(&self, label: &str) -> bool {
+        if self.sleep_hidden_profiles.lock().map(|g| *g).unwrap_or(false) {
+            return true;
+        }
+        self.label_profile
+            .lock()
+            .ok()
+            .and_then(|m| m.get(label).cloned())
+            .map(|profile_id| !self.is_profile_notify_enabled(&profile_id))
+            .unwrap_or(false)
     }
 
     pub fn emit_profile_event(&self, event: ProfileAlertEvent) {
@@ -1445,9 +1464,10 @@ fn evict_idle_webviews(app: &AppHandle, state: &Arc<WorkspaceState>) {
         if let Ok(mut m) = state.last_used.lock() {
             m.remove(&label);
         }
+        if let Ok(mut m) = state.label_profile.lock() {
+            m.remove(&label);
+        }
     }
-
-    trim_process_ram();
 }
 
 fn make_window_label(platform: &str, profile_id: &str) -> String {
@@ -1464,6 +1484,56 @@ fn make_window_label(platform: &str, profile_id: &str) -> String {
 
 /// Ẩn triệt để cửa sổ WebView con ở cấp cửa sổ ngoài (Tauri Window + Win32 HWND).
 /// Không dùng `as_ref().hide()` vì có thể làm WebView2 đóng băng requestAnimationFrame của trang.
+/// Đặt chế độ tiết kiệm cho WebView2 của một tài khoản.
+/// - `low_memory`: `MemoryUsageTargetLevel = Low` (WebView2 tự giảm bộ nhớ, JS vẫn chạy).
+/// - `sleep`: `IsVisible = false` + `TrySuspend` (dừng JS/timer, không còn báo tin mới).
+///   `sleep = false` thì bật lại `IsVisible` + `Resume`.
+#[cfg(target_os = "windows")]
+fn set_webview_power(win: &tauri::WebviewWindow, sleep: bool, low_memory: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows::core::Interface;
+
+    let _ = win.with_webview(move |pw| unsafe {
+        let controller = pw.controller();
+        let Ok(core) = controller.CoreWebView2() else {
+            return;
+        };
+        let set_memory_level = || {
+            if let Ok(core19) = core.cast::<ICoreWebView2_19>() {
+                let level = if low_memory {
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+                } else {
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+                };
+                let _ = core19.SetMemoryUsageTargetLevel(level);
+            }
+        };
+        let core3 = core.cast::<ICoreWebView2_3>().ok();
+        if sleep {
+            set_memory_level();
+            let _ = controller.SetIsVisible(false);
+            if let Some(core3) = core3 {
+                let handler =
+                    webview2_com::TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(())));
+                let _ = core3.TrySuspend(&handler);
+            }
+        } else {
+            // Resume đặt lại mức bộ nhớ về Normal, nên phải đặt mức sau khi đã đánh thức.
+            let _ = controller.SetIsVisible(true);
+            if let Some(core3) = core3 {
+                let _ = core3.Resume();
+            }
+            set_memory_level();
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_webview_power(_win: &tauri::WebviewWindow, _sleep: bool, _low_memory: bool) {}
+
 fn hide_chat_window_completely(win: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
@@ -1760,12 +1830,19 @@ async fn switch_active_chat_account(
     if let Ok(mut lb) = state.last_bounds.lock() {
         *lb = None;
     }
+    if let Ok(mut m) = state.label_profile.lock() {
+        m.insert(target_label.clone(), profile_id.clone());
+    }
 
-    // Ẩn ngay các cửa sổ khác
+    // Ẩn ngay các cửa sổ khác và cho chúng chạy tiết kiệm
     for (label, win) in app.webview_windows() {
         if label.starts_with("chat_") && label != target_label {
             hide_chat_window_completely(&win);
+            set_webview_power(&win, state.should_sleep_hidden(&label), true);
         }
+    }
+    if let Some(win) = app.get_webview_window(&target_label) {
+        set_webview_power(&win, false, false);
     }
     if let Ok(map) = state.created_hwnds.lock() {
         for (label, &raw_hwnd) in map.iter() {
@@ -2381,6 +2458,24 @@ async fn show_main_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn set_sleep_hidden_profiles(
+    app: AppHandle,
+    state: State<'_, Arc<WorkspaceState>>,
+    enabled: bool,
+) -> Result<(), String> {
+    if let Ok(mut guard) = state.sleep_hidden_profiles.lock() {
+        *guard = enabled;
+    }
+    let active = state.active_chat_label.lock().ok().and_then(|g| g.clone());
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("chat_") && Some(&label) != active.as_ref() {
+            set_webview_power(&win, state.should_sleep_hidden(&label), true);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_max_live_webviews(
     app: AppHandle,
     state: State<'_, Arc<WorkspaceState>>,
@@ -2411,6 +2506,10 @@ async fn set_profile_notifications_enabled(
             "window.__BCH_SET_NOTIFY_ENABLED__ && window.__BCH_SET_NOTIFY_ENABLED__({});",
             enabled
         ));
+        let active = state.active_chat_label.lock().ok().and_then(|g| g.clone());
+        if active.as_deref() != Some(label.as_str()) {
+            set_webview_power(&win, state.should_sleep_hidden(&label), true);
+        }
     }
     Ok(())
 }
@@ -2886,6 +2985,7 @@ pub fn run() {
             optimize_ram_now,
             show_main_window,
             set_max_live_webviews,
+            set_sleep_hidden_profiles,
             set_profile_notifications_enabled,
             open_app_data_folder,
             list_profile_dirs,
