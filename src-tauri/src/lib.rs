@@ -2395,7 +2395,45 @@ fn reveal_main_window(app: &AppHandle, state: &Arc<WorkspaceState>) {
         *lb = None;
     }
     sync_embedded_chat_bounds(app, state);
+
+    // Cửa sổ chính vừa hiện lại có thể chưa ổn định kích thước/tiêu điểm, và WebView2 của khung
+    // chat có thể còn giữ bề mặt trống từ lúc cha bị ẩn: đặt lại vài lần và ép vẽ lại.
+    let app_clone = app.clone();
+    let state_clone = Arc::clone(state);
+    std::thread::spawn(move || {
+        for delay_ms in [150u64, 450, 1200] {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            let visible = app_clone
+                .get_webview_window("main")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false);
+            if !visible {
+                return;
+            }
+            let active = state_clone.active_chat_label.lock().ok().and_then(|g| g.clone());
+            if let Some(win) = active.and_then(|l| app_clone.get_webview_window(&l)) {
+                repaint_webview(&win);
+            }
+            if let Ok(mut lb) = state_clone.last_bounds.lock() {
+                *lb = None;
+            }
+            sync_embedded_chat_bounds(&app_clone, &state_clone);
+        }
+    });
 }
+
+/// Ép WebView2 vẽ lại bằng cách tắt/bật `IsVisible` của controller.
+#[cfg(target_os = "windows")]
+fn repaint_webview(win: &tauri::WebviewWindow) {
+    let _ = win.with_webview(|pw| unsafe {
+        let controller = pw.controller();
+        let _ = controller.SetIsVisible(false);
+        let _ = controller.SetIsVisible(true);
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn repaint_webview(_win: &tauri::WebviewWindow) {}
 
 #[tauri::command]
 async fn set_max_live_webviews(
