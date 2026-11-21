@@ -24,6 +24,7 @@ const MAX_TEXT_CHARS: usize = 8 * 1024;
 pub const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_CONCURRENT_CONNS: usize = 4;
 const MIN_PAIR_CODE_LEN: usize = 6;
+static PART_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LanPeer {
@@ -222,8 +223,8 @@ fn handle_conn(app: AppHandle, stream: TcpStream, state: Arc<LanState>) {
         }
         let dir = download_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let path = unique_path(&dir, &name);
-        let part = path.with_file_name(format!("{name}.{at}.part"));
+        let seq = PART_SEQ.fetch_add(1, Ordering::SeqCst);
+        let part = dir.join(format!(".henry-lan-{at}-{seq}.part"));
         let mut out = match std::fs::File::create(&part) {
             Ok(f) => f,
             Err(_) => return reply(&stream, "ERR io"),
@@ -232,10 +233,11 @@ fn handle_conn(app: AppHandle, stream: TcpStream, state: Arc<LanState>) {
         let copied = std::io::copy(&mut limited, &mut out);
         let complete = matches!(copied, Ok(n) if n == size) && out.flush().is_ok();
         drop(out);
-        if !complete || std::fs::rename(&part, &path).is_err() {
+        let path = if complete { reserve_unique_path(&dir, &name) } else { None };
+        let Some(path) = path.filter(|p| std::fs::rename(&part, p).is_ok()) else {
             let _ = std::fs::remove_file(&part);
             return reply(&stream, "ERR io");
-        }
+        };
         reply(&stream, "OK");
         let _ = app.emit(
             "bch-lan-file",
@@ -338,22 +340,26 @@ fn sanitize_name(name: &str) -> String {
     }
 }
 
-fn unique_path(dir: &PathBuf, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
+/// Chọn tên chưa tồn tại và tạo file rỗng ngay (`create_new`) để 2 lượt nhận song song
+/// không chọn trùng đích rồi ghi đè lên nhau.
+fn reserve_unique_path(dir: &PathBuf, name: &str) -> Option<PathBuf> {
     let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (name.to_string(), String::new()),
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.to_string(), String::new()),
     };
-    for i in 1..10000 {
-        let p = dir.join(format!("{stem} ({i}){ext}"));
-        if !p.exists() {
-            return p;
+    for i in 0..10000 {
+        let candidate = if i == 0 {
+            dir.join(name)
+        } else {
+            dir.join(format!("{stem} ({i}){ext}"))
+        };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(_) => return Some(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
         }
     }
-    candidate
+    None
 }
 
 fn download_dir() -> PathBuf {
