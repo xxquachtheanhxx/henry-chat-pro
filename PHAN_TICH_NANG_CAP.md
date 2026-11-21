@@ -14,6 +14,7 @@
 6. [Code health](#6-code-health)
 7. [Roadmap P0/P1/P2](#7-roadmap-p0p1p2)
 8. [Sprint sửa lỗi đầu tiên (5 hạng mục)](#8-sprint-sửa-lỗi-đầu-tiên-5-hạng-mục)
+9. [Kế hoạch cập nhật: Bảo mật · Chạy nhẹ · Mượt](#9-kế-hoạch-cập-nhật-bảo-mật--chạy-nhẹ--mượt)
 
 ---
 
@@ -256,3 +257,100 @@ Mục tiêu: chặn rủi ro bảo mật lớn nhất và mất dữ liệu, đ�
 5. **P1-1 (rút gọn) + P2-3 (tối thiểu) — Privacy mode & lưới an toàn** (M): hoặc sửa privacy end-to-end, hoặc ẩn toggle cho tới khi sửa; thêm script `typecheck`/`lint` và workflow CI chạy `tsc`, `vite build`, `cargo check` trên Windows runner.
 
 Sau sprint 1: tiến hành P1-2/P1-3/P1-4 (secrets & CSP), rồi bắt đầu tách `App.tsx` (P2-1) dưới bảo vệ của CI + test.
+
+---
+
+## 9. Kế hoạch cập nhật: Bảo mật · Chạy nhẹ · Mượt
+
+> Bổ sung theo yêu cầu của chủ dự án: ưu tiên **bảo mật**, **độ mượt** và **chạy nhẹ**. Mục này **thay thế mục 8** làm thứ tự thực hiện khuyến nghị; mục 7 vẫn là danh sách đầy đủ.
+> Các con số hiệu năng dưới đây là **ước lượng từ code**, chưa đo trên Windows (VM phân tích là Linux, không chạy được WebView2).
+
+### 9.1 Vì sao app nặng / giật (bằng chứng trong code)
+
+| # | Nguyên nhân | Bằng chứng | Ảnh hưởng |
+|---|-------------|------------|-----------|
+| H1 | Mỗi tài khoản = 1 WebView2 với user data dir riêng → mỗi tài khoản là 1 nhóm process Edge riêng; mặc định giữ 3 WebView sống | `lib.rs:1778-1783`, `lib.rs:111` (`max_live_webviews = 3`) | RAM tăng gần tuyến tính theo số tài khoản đang mở |
+| H2 | WebView bị ẩn vẫn chạy JS bình thường (không suspend); script giám sát quét DOM mỗi 1,6 s ở **mọi** WebView sống, Telegram quét cả danh sách chat mỗi vòng | `lib.rs:753-814` (`setInterval(pollPassiveStatus, 1600)`) | CPU nền liên tục, tốn pin |
+| H3 | `trim_process_ram` gọi `SetProcessWorkingSetSize` cho **process chính** sau mỗi lần evict/tối ưu — chỉ làm số trong Task Manager giảm tạm, sau đó page fault nạp lại | `lib.rs:166-183`, `lib.rs:1450`, `lib.rs:2368` | Giật ngay sau khi "tối ưu RAM" |
+| H4 | Eviction WebView dư chạy theo vòng 60 s | `lib.rs:2803-2806` | WebView thừa sống thêm tới 60 s |
+| H5 | Effect chuyển tài khoản phụ thuộc `leftInset` → kéo sidebar/mở panel là gọi lại `switch_active_chat_account` (qua `window_op_lock`) | `App.tsx:1092-1110` | Khung chat nháy/giật |
+| H6 | `App.tsx` là 1 component (57 `useState`, 27 `useEffect`) → mỗi thông báo/toast/unread re-render toàn bộ UI | `App.tsx:452` trở đi | Giao diện lag khi nhiều tin đến |
+| H7 | LAN tự khởi động: UDP broadcast mỗi 3 s + TCP listener + thread, dù không dùng | `lib.rs:2731`, `lan.rs:192-223` | Tốn tài nguyên + rủi ro bảo mật (S1) |
+| H8 | Relay proxy không được dọn khi đổi cấu hình | `net.rs:254` | Rò rỉ thread/port |
+| H9 | Modal/Inbox/LAN panel phải ẩn native WebView | `App.tsx:621-630` | Nháy trắng khi mở/đóng panel |
+| H10 | CSS: `backdrop-filter` (3 chỗ) + animation `infinite` cho cảnh báo cuộc gọi | `styles.css:694, 865, 936, 1011, 1110` | Tải GPU nhẹ trên máy yếu |
+| H11 | `Cargo.toml` không có `[profile.release]` tuỳ chỉnh | `src-tauri/Cargo.toml` | Binary lớn hơn cần thiết |
+
+### 9.2 Lộ trình theo giai đoạn
+
+Effort: **S** ≤ 0,5 ngày · **M** 1–2 ngày · **L** 3–5 ngày · **XL** > 1 tuần.
+
+**Giai đoạn 0 — Đo baseline & lưới an toàn (~1 ngày)**
+
+| Việc | Effort |
+|------|--------|
+| Đo trên Windows: RAM với 3 và 6 tài khoản, CPU idle 5 phút, thời gian chuyển tài khoản, thời gian khởi động (Task Manager / `Get-Process msedgewebview2`) | S |
+| CI GitHub Actions trên `windows-latest`: `tsc --noEmit`, `vite build`, `cargo check` | S–M |
+
+**Giai đoạn 1 — Bảo mật P0 (~1 tuần)**
+
+| Việc | Liên quan | Effort |
+|------|-----------|--------|
+| LAN tắt mặc định, chỉ bật khi mở panel; pairing PIN; xác nhận trước khi nhận file; giới hạn header/file/số kết nối | S1, H7 | M |
+| `open_system_browser` chỉ cho `http`/`https`, bỏ fallback PowerShell | S5 | S |
+| Validate `platform`/`profile_id` (`^[A-Za-z0-9_-]+$`) ở Rust trước mọi thao tác file | S10 | S |
+| Trả lời nhanh: chỉ "điền" vào ô soạn, không tự Enter; script trả kết quả thật | B4 | S |
+| Sửa khôi phục snapshot (không seed demo khi có snapshot, chỉ ghi sau khi load xong, giữ `.bak`) | B3 | S–M |
+
+**Giai đoạn 2 — Chạy nhẹ (~1–1,5 tuần)**
+
+| Việc | Liên quan | Lợi ích dự kiến | Effort |
+|------|-----------|-----------------|--------|
+| Cho WebView bị ẩn "ngủ": `ICoreWebView2_3::TrySuspend` + `ICoreWebView2_19::MemoryUsageTargetLevel = Low`; `Resume` khi chọn lại | H1, H2 | Giảm RAM/CPU lớn nhất | M |
+| Tuỳ chọn mỗi tài khoản: "Luôn chạy nền để nhận thông báo" / "Cho ngủ" (WebView ngủ sẽ không phát thông báo) | H1, H2 | Người dùng tự cân bằng RAM ↔ thông báo | S |
+| Thay polling 1,6 s bằng `MutationObserver` (title/badge); khi ẩn chỉ quét thưa 5–10 s | H2 | Ít đánh thức CPU | M |
+| Bỏ `trim_process_ram`; evict ngay khi chuyển tài khoản thay vì chờ vòng 60 s | H3, H4 | Hết giật sau "tối ưu RAM" | S |
+| Lazy start: chỉ tạo WebView của tài khoản đang chọn khi khởi động | H1 | Khởi động nhanh | S |
+| Dọn relay proxy cũ khi đổi cấu hình/đóng profile | H8 | Hết rò rỉ thread | S |
+| Thêm `[profile.release]`: `lto = true`, `codegen-units = 1`, `strip = true`, `panic = "abort"`, `opt-level = "s"` | H11 | Binary nhỏ hơn | S |
+
+**Giai đoạn 3 — Mượt + sửa tính năng hỏng (~1 tuần)**
+
+| Việc | Liên quan | Effort |
+|------|-----------|--------|
+| Tách cập nhật vị trí/kích thước khung chat (command riêng, chỉ `SetWindowPos`) khỏi `switch_active_chat_account` | H5, B9 | S–M |
+| Đưa notifications/toasts/alerts vào store riêng (Zustand hoặc context tách), `React.memo` cho sidebar/rail/khung chat | H6 | M |
+| `callTauri` trả lỗi có kiểu + toast lỗi; xoá profile trả kết quả thật | 6.4, B11 | M |
+| Privacy mode: sửa end-to-end (gửi `privacy` trong `webConfigJson`, XHR giả lập đủ event) hoặc ẩn toggle | B1, B2 | M |
+| Thoát hẳn khi tắt minimize-to-tray; thay balloon bằng notification của Tauri | B6, B7 | S–M |
+| Giảm `backdrop-filter`, hỗ trợ `prefers-reduced-motion`; cân nhắc ảnh chụp WebView (`CapturePreview`) làm nền khi mở modal để hết nháy trắng | H9, H10 | S (CSS) / L (CapturePreview) |
+
+**Giai đoạn 4 — Bảo mật P1 + dọn code (2–3 tuần)**
+
+| Việc | Liên quan | Effort |
+|------|-----------|--------|
+| Mật khẩu proxy → Windows Credential Manager (crate `keyring`), loại khỏi localStorage/snapshot | S2 | M |
+| Relay proxy có token xác thực | S3 | M |
+| CSP chặt cho bundle local, tắt `withGlobalTauri`, permission cho từng command | S4 | M |
+| Mic/camera chỉ auto-allow cho origin Zalo/Messenger/Telegram/WhatsApp | S6 | S |
+| Nonce cho title IPC | S7 | S |
+| Tách `App.tsx` thành hooks/components, tách `lib.rs`, script JS ra file `include_str!` | 6.1, 6.2 | XL |
+| Test: Vitest (storage, restore, proxy normalize) + Rust unit test (`lan.rs`, `net.rs`, `bridge.rs`) | 6.5 | L |
+
+### 9.3 Sprint 1 khuyến nghị (~1,5 tuần, tối đa 5 hạng mục)
+
+1. **Khoá LAN share** — tắt mặc định, pairing PIN, xác nhận nhận file, giới hạn kích thước (bảo mật + bớt tải nền).
+2. **Sửa khôi phục snapshot** — chống mất danh sách tài khoản.
+3. **WebView ẩn "ngủ"** — `TrySuspend` + `MemoryUsageTargetLevel=Low`, kèm tuỳ chọn "luôn chạy nền" cho tài khoản cần thông báo; bỏ `trim_process_ram`.
+4. **Hết nháy khi chuyển tài khoản / kéo sidebar** — tách command cập nhật bounds khỏi `switch_active_chat_account`.
+5. **CI + đo baseline** — chạy `tsc`, `vite build`, `cargo check` trên Windows; ghi số RAM/CPU trước–sau để chứng minh hiệu quả.
+
+### 9.4 Tiêu chí hoàn thành (đề xuất, đo trên Windows)
+
+| Chỉ số | Mục tiêu |
+|--------|----------|
+| RAM khi mở 6 tài khoản, chỉ 1 hiển thị | Giảm rõ rệt so với baseline (mục tiêu ≥ 30%) |
+| CPU idle 5 phút | Gần 0% khi tất cả tài khoản ẩn đang "ngủ" |
+| Chuyển tài khoản đã mở | Không nháy trắng, < 200 ms cảm nhận |
+| Kéo sidebar / mở panel | Không gọi lại `switch_active_chat_account` |
+| Cổng mạng mở khi chưa dùng LAN | Không có |
