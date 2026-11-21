@@ -1052,6 +1052,18 @@ export default function App() {
     void callTauri("set_max_live_webviews", { maxLive: settings.maxLiveWebviews });
   }, [settings.maxLiveWebviews]);
 
+  // Rust không lưu trạng thái thông báo từng tài khoản qua lần khởi động; đồng bộ lại khi mở app.
+  const notifySyncKey = accounts
+    .map((a) => `${a.platformId}\u0000${a.id}\u0000${a.notificationsEnabled !== false ? 1 : 0}`)
+    .join("\u0001");
+  useEffect(() => {
+    if (!TAURI_READY || !notifySyncKey) return;
+    for (const entry of notifySyncKey.split("\u0001")) {
+      const [platform, profileId, on] = entry.split("\u0000");
+      void callTauri("set_profile_notifications_enabled", { platform, profileId, enabled: on === "1" });
+    }
+  }, [notifySyncKey]);
+
   /* ----------------------- Đồng bộ danh sách & lựa chọn -------------------- */
   const filteredAccounts = useMemo(() => {
     let list = accounts;
@@ -1114,6 +1126,22 @@ export default function App() {
   accountsRef.current = accounts;
   const muteRef = useRef(settings.muteSound);
   muteRef.current = settings.muteSound;
+  const hidePanelRef = useRef(settings.hideAccountPanel);
+  hidePanelRef.current = settings.hideAccountPanel;
+  // Tài khoản vừa có tin mới: nhấp nháy vài giây (giống hiệu ứng cuộc gọi đến).
+  const [freshMessages, setFreshMessages] = useState<Record<string, number>>({});
+  const markFreshMessage = useCallback((profileId: string) => {
+    const stamp = Date.now();
+    setFreshMessages((prev) => ({ ...prev, [profileId]: stamp }));
+    window.setTimeout(() => {
+      setFreshMessages((prev) => {
+        if (prev[profileId] !== stamp) return prev;
+        const next = { ...prev };
+        delete next[profileId];
+        return next;
+      });
+    }, 8000);
+  }, []);
   const lastSoundAtRef = useRef(0);
 
   const pushToast = useCallback((toast: AlertToastItem) => {
@@ -1179,6 +1207,9 @@ export default function App() {
       if (!notifyOn) return;
 
       const isCall = kind === "call_start";
+      if (kind === "message") markFreshMessage(profileId);
+      // Khung tài khoản đang ẩn thì mở tạm để thấy nút "Nhận cuộc gọi".
+      if (isCall && hidePanelRef.current) setPanelPeek(true);
       if (kind === "message" || isCall) {
         pushToast({
           id: `${profileId}_${Date.now()}`,
@@ -1237,7 +1268,7 @@ export default function App() {
         });
       }
     },
-    [getPlatform, pushToast]
+    [getPlatform, pushToast, markFreshMessage]
   );
 
   const alertHandlerRef = useRef(handleAlert);
@@ -1358,6 +1389,12 @@ export default function App() {
       setPanelPeek(false);
       setSelectedAccountId(acc.id);
       setAlertToasts((prev) => prev.filter((t) => t.profileId !== acc.id));
+      setFreshMessages((prev) => {
+        if (!(acc.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[acc.id];
+        return next;
+      });
     },
     [closeAllModals]
   );
@@ -1939,11 +1976,19 @@ export default function App() {
               {pinnedAccounts.map((acc) => {
                 const plat = getPlatform(acc.platformId);
                 const unread = profileAlerts[acc.id]?.unreadCount || 0;
+                const pinNotifyOn = acc.notificationsEnabled !== false;
+                const pinAlertClass = !pinNotifyOn
+                  ? ""
+                  : profileAlerts[acc.id]?.hasIncomingCall
+                    ? "incoming-call"
+                    : freshMessages[acc.id]
+                      ? "new-message"
+                      : "";
                 return (
                   <button
                     key={acc.id}
                     type="button"
-                    className={`bch-rail-pin ${selectedAccountId === acc.id ? "active" : ""}`}
+                    className={`bch-rail-pin ${selectedAccountId === acc.id ? "active" : ""} ${pinAlertClass}`}
                     title={`${acc.name} • ${plat.name}\nChuột phải: chỉnh sửa`}
                     onClick={() => {
                       setPanelPeek(false);
@@ -2220,7 +2265,7 @@ export default function App() {
 
                 {alertToasts.map((toast) => (
                   <div
-                    className="bch-toast-row"
+                    className={`bch-toast-row ${toast.isCall ? "incoming-call" : "new-message"}`}
                     key={toast.id}
                     onClick={() => {
                       const acc = accounts.find((a) => a.id === toast.profileId);
@@ -2328,7 +2373,7 @@ export default function App() {
                 return (
                   <div
                     className={`bch-acc-card ${isSelected ? "active" : ""} ${
-                      hasCall ? "incoming-call" : ""
+                      hasCall ? "incoming-call" : notifyOn && freshMessages[acc.id] ? "new-message" : ""
                     } ${draggedProfileId === acc.id ? "dragging" : ""} ${
                       dragOverProfileId === acc.id ? "drag-over" : ""
                     }`}
