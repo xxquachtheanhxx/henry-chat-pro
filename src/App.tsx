@@ -3608,16 +3608,6 @@ export default function App() {
                   type="button"
                   className="bch-btn"
                   onClick={async () => {
-                    const msg = await callTauri<string>("optimize_ram_now");
-                    flashStatus(msg || "Không chạy được tối ưu RAM");
-                  }}
-                >
-                  🧠 Giải phóng RAM
-                </button>
-                <button
-                  type="button"
-                  className="bch-btn"
-                  onClick={async () => {
                     const dir = await callTauri<string>("open_app_data_folder");
                     flashStatus(dir ? `📂 Đã mở ${dir}` : "Không mở được thư mục dữ liệu");
                   }}
