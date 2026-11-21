@@ -131,6 +131,8 @@ export interface WorkspaceSettings {
   privacyBlockTyping: boolean;
   /** Số WebView giữ chạy đồng thời (0 = không giới hạn) */
   maxLiveWebviews: number;
+  /** Cho mọi tài khoản đang ẩn "ngủ" để tiết kiệm RAM/CPU (không báo tin mới khi ngủ) */
+  sleepHiddenProfiles: boolean;
   /** Sáng / Tối / Theo hệ thống */
   theme: ThemeMode;
   /** Ẩn toàn bộ khung tài khoản, chỉ còn thanh điều hướng */
@@ -502,6 +504,7 @@ export default function App() {
         typeof saved.privacyBlockTyping === "boolean" ? saved.privacyBlockTyping : false,
       maxLiveWebviews:
         typeof saved.maxLiveWebviews === "number" ? saved.maxLiveWebviews : 3,
+      sleepHiddenProfiles: !!saved.sleepHiddenProfiles,
       theme: saved.theme === "light" || saved.theme === "dark" ? saved.theme : "system",
       hideAccountPanel: !!saved.hideAccountPanel,
       railSide: saved.railSide === "right" ? "right" : "left",
@@ -1051,6 +1054,22 @@ export default function App() {
     if (!TAURI_READY) return;
     void callTauri("set_max_live_webviews", { maxLive: settings.maxLiveWebviews });
   }, [settings.maxLiveWebviews]);
+
+  useEffect(() => {
+    void callTauri("set_sleep_hidden_profiles", { enabled: settings.sleepHiddenProfiles });
+  }, [settings.sleepHiddenProfiles]);
+
+  // Rust không lưu trạng thái thông báo từng tài khoản qua lần khởi động; đồng bộ lại khi mở app.
+  const notifySyncKey = accounts
+    .map((a) => `${a.platformId}\u0000${a.id}\u0000${a.notificationsEnabled !== false ? 1 : 0}`)
+    .join("\u0001");
+  useEffect(() => {
+    if (!TAURI_READY || !notifySyncKey) return;
+    for (const entry of notifySyncKey.split("\u0001")) {
+      const [platform, profileId, on] = entry.split("\u0000");
+      void callTauri("set_profile_notifications_enabled", { platform, profileId, enabled: on === "1" });
+    }
+  }, [notifySyncKey]);
 
   /* ----------------------- Đồng bộ danh sách & lựa chọn -------------------- */
   const filteredAccounts = useMemo(() => {
@@ -3421,6 +3440,20 @@ export default function App() {
                   tự đóng để giải phóng RAM. Phiên đăng nhập vẫn được giữ trên ổ đĩa nên mở
                   lại không phải đăng nhập lại; đổi lại, tài khoản đã đóng sẽ không báo tin
                   nhắn mới cho tới khi bạn mở lại.
+                </p>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--bch-text-soft)", marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.sleepHiddenProfiles}
+                    onChange={(e) =>
+                      setSettings((prev) => ({ ...prev, sleepHiddenProfiles: e.target.checked }))
+                    }
+                  />
+                  Cho tài khoản đang ẩn "ngủ" (nhẹ máy nhất)
+                </label>
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--bch-muted)", lineHeight: 1.45 }}>
+                  Tài khoản đang ngủ không báo tin nhắn mới cho tới khi bạn mở lại. Tài khoản đã
+                  tắt thông báo luôn được cho ngủ khi ẩn.
                 </p>
               </div>
               <div className="bch-footer-row">
