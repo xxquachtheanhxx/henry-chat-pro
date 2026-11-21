@@ -457,6 +457,11 @@ export default function App() {
     return reconcilePlatforms(base, loadJson<AccountProfile[]>(LS_ACCOUNTS, []));
   });
 
+  // localStorage trống lúc mở app => danh sách đang là dữ liệu mẫu, bản sao lưu trên đĩa được ưu tiên.
+  const seededDefaultsRef = useRef(!localStorage.getItem(LS_ACCOUNTS));
+  // Chưa khôi phục xong thì không ghi đè bản sao lưu trên đĩa.
+  const [snapshotRestored, setSnapshotRestored] = useState(!TAURI_READY);
+
   const [accounts, setAccounts] = useState<AccountProfile[]>(() => {
     // Chỉ seed dữ liệu mẫu khi THẬT SỰ chưa có gì. Nếu dữ liệu đã lưu bị hỏng thì giữ
     // danh sách rỗng (không ghi đè) để bước khôi phục từ đĩa dựng lại tài khoản.
@@ -927,6 +932,13 @@ export default function App() {
     if (!TAURI_READY) return;
     let cancelled = false;
     void (async () => {
+      try {
+        await restoreFromDisk();
+      } finally {
+        if (!cancelled) setSnapshotRestored(true);
+      }
+    })();
+    async function restoreFromDisk() {
       const [dirs, snapRaw] = await Promise.all([
         callTauri<string[]>("list_profile_dirs"),
         callTauri<string>("load_workspace_snapshot"),
@@ -972,7 +984,7 @@ export default function App() {
       let baseAccounts = mergedAccounts;
       let basePlatforms = mergedPlatforms;
       let restoredFromBackup = false;
-      if (baseAccounts.length === 0 && snapAccounts.length > 0) {
+      if ((baseAccounts.length === 0 || seededDefaultsRef.current) && snapAccounts.length > 0) {
         baseAccounts = snapAccounts;
         if (snapPlatforms.length > 0) basePlatforms = snapPlatforms;
         restoredFromBackup = true;
@@ -1021,7 +1033,7 @@ export default function App() {
           ? `♻️ Đã khôi phục ${recovered.length} tài khoản từ dữ liệu trên đĩa — bấm ✎ Sửa để đặt lại tên/URL.`
           : "♻️ Đã khôi phục danh sách tài khoản từ bản sao lưu trên đĩa."
       );
-    })();
+    }
     return () => {
       cancelled = true;
     };
@@ -1030,11 +1042,11 @@ export default function App() {
 
   // Bản sao lưu cấu hình ra file JSON trên đĩa (localStorage có thể bị mất).
   useEffect(() => {
-    if (!TAURI_READY) return;
+    if (!TAURI_READY || !snapshotRestored) return;
     void callTauri("save_workspace_snapshot", {
       payload: JSON.stringify({ accounts, platforms, savedAt: Date.now() }),
     });
-  }, [accounts, platforms]);
+  }, [accounts, platforms, snapshotRestored]);
 
   // Cảnh báo khi dữ liệu cài đặt đã lưu bị hỏng (loadJson đã tự sao lưu bản gốc).
   useEffect(() => {
