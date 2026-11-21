@@ -2506,6 +2506,10 @@ async fn set_profile_notifications_enabled(
             "window.__BCH_SET_NOTIFY_ENABLED__ && window.__BCH_SET_NOTIFY_ENABLED__({});",
             enabled
         ));
+        let active = state.active_chat_label.lock().ok().and_then(|g| g.clone());
+        if active.as_deref() != Some(label.as_str()) {
+            set_webview_power(&win, state.should_sleep_hidden(&label), true);
+        }
     }
     Ok(())
 }
