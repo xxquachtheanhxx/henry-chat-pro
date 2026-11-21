@@ -236,27 +236,6 @@ impl WorkspaceState {
     }
 }
 
-/// Tối ưu hóa bộ nhớ RAM bằng Windows Kernel API (Working Set Optimization)
-#[cfg(target_os = "windows")]
-fn trim_process_ram() {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetCurrentProcess() -> *mut std::ffi::c_void;
-        fn SetProcessWorkingSetSize(
-            hProcess: *mut std::ffi::c_void,
-            dwMinimumWorkingSetSize: usize,
-            dwMaximumWorkingSetSize: usize,
-        ) -> i32;
-    }
-    unsafe {
-        let handle = GetCurrentProcess();
-        let _ = SetProcessWorkingSetSize(handle, usize::MAX, usize::MAX);
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn trim_process_ram() {}
-
 #[cfg(target_os = "windows")]
 fn win32_hide_hwnd(raw_hwnd: isize) {
     #[link(name = "user32")]
@@ -825,9 +804,12 @@ fn build_notify_call_monitor_script(platform: &str, profile_id: &str, notify_ena
                 }
             }
 
+            let pollTick = 0;
             function pollPassiveStatus() {
                 try {
+                    pollTick++;
                     const unread = readPlatformUnreadCount();
+                    const unreadChanged = unread !== lastUnreadCount;
                     if (unread !== lastUnreadCount) {
                         const increased = lastUnreadCount >= 0 && unread > lastUnreadCount;
                         lastUnreadCount = unread;
@@ -843,8 +825,9 @@ fn build_notify_call_monitor_script(platform: &str, profile_id: &str, notify_ena
                         }
                     }
 
-                    // Telegram: quét danh sách hội thoại mỗi vòng để phát thông báo theo từng nhóm/tin nhắn.
-                    if (PLAT_ID === 'telegram') {
+                    // Telegram: quét danh sách hội thoại để phát thông báo theo từng nhóm/tin nhắn.
+                    // Quét tới 60 dòng nên chỉ chạy khi tổng chưa đọc đổi, hoặc mỗi 5 vòng (~8 giây).
+                    if (PLAT_ID === 'telegram' && (unreadChanged || !chatDigestInit || pollTick % 5 === 0)) {
                         const digest = readTelegramChatDigest();
                         for (let di = 0; di < digest.length; di++) {
                             const chat = digest[di];
@@ -2496,12 +2479,6 @@ async fn set_chat_always_on_top(app: AppHandle, always_on_top: bool) -> Result<(
     set_workspace_always_on_top(app, always_on_top).await
 }
 
-#[tauri::command]
-async fn optimize_ram_now() -> Result<String, String> {
-    trim_process_ram();
-    Ok("Đã giải phóng Working Set RAM".to_string())
-}
-
 /// Đặt số WebView tối đa được giữ chạy (0 = không giới hạn). Đóng ngay các WebView ít dùng nhất.
 /// Hiện cửa sổ chính khi React đã render xong (tránh khung trắng lúc khởi động).
 #[tauri::command]
@@ -3087,7 +3064,6 @@ pub fn run() {
             delete_chat_profile_completely,
             set_workspace_always_on_top,
             set_chat_always_on_top,
-            optimize_ram_now,
             show_main_window,
             set_max_live_webviews,
             set_sleep_hidden_profiles,
