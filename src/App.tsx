@@ -528,7 +528,7 @@ export default function App() {
   /** Mở tạm khung tài khoản khi đang bật chế độ ẩn (bấm 💬 trên thanh điều hướng). */
   const [panelPeek, setPanelPeek] = useState(false);
   /** Bảng nổi hiện profile của một nhóm khi bấm vào nhóm trên thanh điều hướng. */
-  const [railGroupMenu, setRailGroupMenu] = useState<{ id: string; top: number } | null>(null);
+  const [railGroupMenu, setRailGroupMenu] = useState<{ kind: "group" | "platform"; id: string; top: number } | null>(null);
   const panelVisible = !settings.hideAccountPanel || panelPeek;
   /** Phần chiều ngang mà thanh điều hướng + khung tài khoản chiếm hai bên. */
   const accountPanelSpan = panelVisible ? RAIL_WIDTH + SIDEBAR_WIDTH : RAIL_WIDTH;
@@ -722,7 +722,12 @@ export default function App() {
     if (!railGroupMenu) return;
     const onDown = (e: MouseEvent) => {
       const el = e.target as HTMLElement | null;
-      if (el?.closest(".bch-rail-flyout") || el?.closest(".bch-rail-group-btn")) return;
+      if (
+        el?.closest(".bch-rail-flyout") ||
+        el?.closest(".bch-rail-group-btn") ||
+        el?.closest(".bch-rail-pin")
+      )
+        return;
       setRailGroupMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
@@ -1945,9 +1950,27 @@ export default function App() {
                     type="button"
                     className={`bch-rail-pin ${selectedAccountId === acc.id ? "active" : ""}`}
                     title={`${acc.name} • ${plat.name}\nChuột phải: chỉnh sửa`}
-                    onClick={() => {
-                      setPanelPeek(false);
-                      selectAccount(acc);
+                    onClick={(e) => {
+                      const siblings = accounts.filter((a) => a.platformId === acc.platformId);
+                      // Nền tảng chỉ có 1 tài khoản: mở thẳng. Nhiều tài khoản: mở danh sách để chọn.
+                      if (siblings.length <= 1) {
+                        setRailGroupMenu(null);
+                        setPanelPeek(false);
+                        selectAccount(acc);
+                        return;
+                      }
+                      closeAllModals();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const maxTop = Math.max(10, window.innerHeight - 130 - siblings.length * 38);
+                      setRailGroupMenu((prev) =>
+                        prev && prev.kind === "platform" && prev.id === acc.platformId
+                          ? null
+                          : {
+                              kind: "platform",
+                              id: acc.platformId,
+                              top: Math.max(10, Math.min(rect.top - 8, maxTop)),
+                            }
+                      );
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -1989,9 +2012,9 @@ export default function App() {
                       const rect = e.currentTarget.getBoundingClientRect();
                       const maxTop = Math.max(10, window.innerHeight - 130 - members.length * 38);
                       setRailGroupMenu((prev) =>
-                        prev && prev.id === g.id
+                        prev && prev.kind === "group" && prev.id === g.id
                           ? null
-                          : { id: g.id, top: Math.max(10, Math.min(rect.top - 8, maxTop)) }
+                          : { kind: "group", id: g.id, top: Math.max(10, Math.min(rect.top - 8, maxTop)) }
                       );
                     }}
                   >
@@ -2008,9 +2031,14 @@ export default function App() {
           )}
           {railGroupMenu &&
             (() => {
-              const group = groups.find((g) => g.id === railGroupMenu.id);
+              const isPlatformMenu = railGroupMenu.kind === "platform";
+              const group = isPlatformMenu
+                ? platforms.find((p) => p.id === railGroupMenu.id)
+                : groups.find((g) => g.id === railGroupMenu.id);
               if (!group) return null;
-              const members = accounts.filter((a) => (a.groupIds || []).includes(group.id));
+              const members = accounts.filter((a) =>
+                isPlatformMenu ? a.platformId === group.id : (a.groupIds || []).includes(group.id)
+              );
               return (
                 <div
                   className={`bch-rail-flyout ${
