@@ -18,7 +18,8 @@ use tauri::{AppHandle, Emitter, State};
 
 pub const DISCOVERY_PORT: u16 = 47821;
 const PROTO_VERSION: u32 = 2;
-const MAX_HEADER_BYTES: u64 = 16 * 1024;
+// Đủ cho MAX_TEXT_CHARS ký tự Unicode sau khi JSON-escape (tối đa 6 byte/ký tự).
+const MAX_HEADER_BYTES: u64 = 64 * 1024;
 const MAX_TEXT_CHARS: usize = 8 * 1024;
 pub const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_CONCURRENT_CONNS: usize = 4;
