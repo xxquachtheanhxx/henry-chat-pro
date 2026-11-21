@@ -2632,3 +2632,49 @@ html[data-theme] .bch-status-banner {
     animation: none;
   }
 }
+
+/* Lỗi nhập liệu của hộp thoại (thay alert) */
+.bch-form-error {
+  position: fixed;
+  top: 12px;
+  z-index: 10050;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.bch-form-error > span {
+  pointer-events: auto;
+  cursor: pointer;
+  max-width: min(460px, calc(100% - 32px));
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  background: #b91c1c;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  animation: bchCardIn 0.18s ease both;
+}
+.bch-empty-note {
+  padding: 14px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--bch-muted);
+  border: 1px dashed var(--bch-border);
+  border-radius: 9px;
+}
+.bch-footer-row > .bch-btn:only-child {
+  grid-column: 1 / -1;
+}
+
+/* Windows "tắt hiệu ứng động": bỏ mọi animation/transition còn lại */
+@media (prefers-reduced-motion: reduce) {
+  .bch-shell *,
+  .bch-shell *::before,
+  .bch-shell *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
