@@ -299,6 +299,20 @@ async function callTauri<T>(
   }
 }
 
+/** Như `callTauri` nhưng trả về lý do thất bại để hiện cho người dùng. */
+async function callTauriResult<T>(
+  cmd: string,
+  args?: Record<string, unknown>
+): Promise<{ ok: boolean; value?: T; error: string }> {
+  if (!TAURI_READY) return { ok: false, error: "Chỉ chạy được trong ứng dụng" };
+  try {
+    return { ok: true, value: await invoke<T>(cmd, args), error: "" };
+  } catch (err) {
+    console.warn(`[bubble-chat] lệnh ${cmd} thất bại:`, err);
+    return { ok: false, error: typeof err === "string" ? err : String((err as Error)?.message || err) };
+  }
+}
+
 let storageWarning = "";
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -1727,7 +1741,7 @@ export default function App() {
     setShowInbox(true);
   }, [closeAllModals]);
 
-  const sendReply = async (item: NotificationItem, send: boolean) => {
+  const sendReply = async (item: NotificationItem) => {
     const acc = accounts.find((a) => a.id === item.profileId);
     if (!acc) {
       flashStatus("⚠️ Tài khoản của thông báo này không còn trong danh sách");
@@ -1737,42 +1751,49 @@ export default function App() {
     if (!text) return;
 
     setReplySending(true);
-    const res = await callTauri<string>("send_chat_message", {
+    const res = await callTauriResult<string>("send_chat_message", {
       platform: acc.platformId,
       profileId: acc.id,
       text,
-      send,
+      send: false,
     });
     setReplySending(false);
 
-    if (res === null) {
-      flashStatus(
-        `⚠️ Không gửi được vào "${acc.name}": khung chat chưa mở. Bấm Mở tài khoản rồi thử lại.`
-      );
+    if (!res.ok) {
+      flashStatus(`⚠️ Không điền được vào "${acc.name}": ${res.error}`);
       return;
     }
     setReplyTargetId(null);
     setReplyText("");
-    flashStatus(
-      send
-        ? `📤 Đã gửi tin nhắn vào khung chat của "${acc.name}"`
-        : `📝 Đã điền vào ô chat của "${acc.name}" — bấm Mở để kiểm tra rồi nhấn Enter trong khung chat`
-    );
+    if (IS_NOTIF_WINDOW) {
+      // Cửa sổ thông báo riêng: để cửa sổ chính mở tài khoản, không tự xoá bảng thông báo.
+      void callTauri("open_profile_from_notification", { profileId: acc.id });
+      return;
+    }
+    setShowInbox(false);
+    selectAccount(acc);
+    flashStatus(`📝 Đã điền vào ô chat của "${acc.name}" — kiểm tra đúng người nhận rồi nhấn Enter`);
   };
 
   const reloadAccount = (acc: AccountProfile) => {
-    void callTauri("reload_chat_account", {
+    void callTauriResult("reload_chat_account", {
       platform: acc.platformId,
       profileId: acc.id,
-    });
-    flashStatus(`🔄 Đã tải lại "${acc.name}"`);
+    }).then((res) =>
+      flashStatus(res.ok ? `🔄 Đã tải lại "${acc.name}"` : `⚠️ Không tải lại được "${acc.name}": ${res.error}`)
+    );
   };
 
   const openInBrowser = (acc: AccountProfile) => {
     const url = accountUrl(acc);
     if (!url) return;
-    void callTauri("open_system_browser", { url });
-    flashStatus(`🌐 Đã mở "${acc.name}" bằng trình duyệt hệ thống`);
+    void callTauriResult("open_system_browser", { url }).then((res) =>
+      flashStatus(
+        res.ok
+          ? `🌐 Đã mở "${acc.name}" bằng trình duyệt hệ thống`
+          : `⚠️ Không mở được "${acc.name}" bằng trình duyệt: ${res.error}`
+      )
+    );
   };
 
   const confirmDeleteAccount = async () => {
@@ -1794,7 +1815,7 @@ export default function App() {
     setAlertToasts((prev) => prev.filter((t) => t.profileId !== target.id));
     setDeleteTarget(null);
 
-    await callTauri("delete_chat_profile_completely", {
+    const res = await callTauriResult("delete_chat_profile_completely", {
       platform: target.platformId,
       profileId: target.id,
     });
@@ -1802,7 +1823,11 @@ export default function App() {
     if (selectedAccountId === target.id) {
       setSelectedAccountId(remaining[0]?.id || "");
     }
-    flashStatus(`Đã xóa tài khoản "${target.name}" cùng dữ liệu đăng nhập của nó`);
+    flashStatus(
+      res.ok
+        ? `Đã xóa tài khoản "${target.name}" cùng dữ liệu đăng nhập của nó`
+        : `⚠️ Đã gỡ "${target.name}" khỏi danh sách nhưng chưa xoá được dữ liệu đăng nhập: ${res.error}`
+    );
   };
 
   const createPlatform = (e: React.FormEvent) => {
@@ -3473,7 +3498,7 @@ export default function App() {
               </label>
               <div style={{ marginTop: 12, borderTop: "1px solid #334155", paddingTop: 10 }}>
                 <div style={{ fontSize: 12.5, color: "var(--bch-text-soft)", marginBottom: 6, fontWeight: 600 }}>
-                  Riêng tư (chặn tín hiệu đã đọc / đang gõ)
+                  Riêng tư — thử nghiệm (chặn tín hiệu đã đọc / đang gõ)
                 </div>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--bch-text-soft)", marginTop: 4 }}>
                   <input
@@ -3496,7 +3521,7 @@ export default function App() {
                   Không gửi "đang gõ" (typing indicator)
                 </label>
                 <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--bch-muted)" }}>
-                  Áp dụng cho mọi profile. Có thể không hiệu quả trên một số nền tảng (Telegram MTProto).
+                  Áp dụng cho mọi profile. Không đảm bảo: Telegram, WhatsApp và một phần Zalo/Messenger gửi tín hiệu này qua kênh mã hoá mà app không chặn được.
                 </p>
               </div>
               <p style={{ margin: "10px 0 0", fontSize: 11, color: "var(--bch-muted)", lineHeight: 1.5 }}>
@@ -3862,18 +3887,10 @@ export default function App() {
                             type="button"
                             className="bch-btn bch-btn-primary"
                             disabled={replySending || !replyText.trim()}
-                            onClick={() => void sendReply(item, true)}
+                            onClick={() => void sendReply(item)}
+                            title="Điền vào ô chat và mở tài khoản để bạn kiểm tra người nhận trước khi gửi"
                           >
-                            {replySending ? "Đang gửi..." : "📤 Gửi"}
-                          </button>
-                          <button
-                            type="button"
-                            className="bch-btn"
-                            disabled={replySending || !replyText.trim()}
-                            onClick={() => void sendReply(item, false)}
-                            title="Chỉ điền vào ô chat để bạn xem lại trước khi gửi"
-                          >
-                            📝 Chỉ điền
+                            {replySending ? "Đang điền..." : "📝 Điền vào ô chat"}
                           </button>
                           <button
                             type="button"
