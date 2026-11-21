@@ -2763,7 +2763,7 @@ async fn set_privacy_mode(
         *g = (block_read_receipts, block_typing);
     }
     let js = format!(
-        "window.__BCH_PRIVACY__ = {{ enabled: {}, read: {}, typing: {} }};",
+        "window.__BCH_PRIVACY__ = {{ enabled: {}, read: {}, typing: {} }}; try {{ sessionStorage.setItem('__bch_privacy', JSON.stringify(window.__BCH_PRIVACY__)); }} catch (e) {{}}",
         block_read_receipts || block_typing,
         block_read_receipts,
         block_typing
@@ -3131,6 +3131,13 @@ fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) ->
             if (window.__BCH_PRIVACY_SCRIPT__) return;
             window.__BCH_PRIVACY_SCRIPT__ = true;
             window.__BCH_PRIVACY__ = {{ enabled: {enabled}, read: {block_read}, typing: {block_typing} }};
+            // Cài đặt đổi sau khi khung chat được tạo nằm trong sessionStorage để còn hiệu lực sau khi tải lại trang.
+            try {{
+                const saved = JSON.parse(sessionStorage.getItem('__bch_privacy') || 'null');
+                if (saved && typeof saved === 'object') {{
+                    window.__BCH_PRIVACY__ = {{ enabled: !!(saved.read || saved.typing), read: !!saved.read, typing: !!saved.typing }};
+                }}
+            }} catch (e) {{}}
 
             function isBlocked(url, body) {{
                 if (!window.__BCH_PRIVACY__ || !window.__BCH_PRIVACY__.enabled) return false;
@@ -3190,6 +3197,14 @@ fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) ->
                 const origSend = XMLHttpRequest.prototype.send;
                 XMLHttpRequest.prototype.open = function(method, url) {{
                     this.__bch_url = url;
+                    // Request dùng lại sau khi bị chặn: bỏ kết quả giả để đọc được phản hồi thật.
+                    if (this.__bch_faked) {{
+                        this.__bch_faked = false;
+                        try {{
+                            delete this.readyState; delete this.status; delete this.statusText;
+                            delete this.responseText; delete this.response;
+                        }} catch (e) {{}}
+                    }}
                     return origOpen.apply(this, arguments);
                 }};
                 XMLHttpRequest.prototype.send = function(body) {{
@@ -3197,6 +3212,7 @@ fn build_privacy_script(platform: &str, block_read: bool, block_typing: bool) ->
                         if (isBlocked(this.__bch_url, body)) {{
                             // Giả lập thành công, và báo hoàn tất để trang không chờ mãi.
                             const xhr = this;
+                            xhr.__bch_faked = true;
                             try {{
                                 Object.defineProperty(xhr, 'readyState', {{ value: 4, configurable: true }});
                                 Object.defineProperty(xhr, 'status', {{ value: 200, configurable: true }});
