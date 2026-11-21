@@ -661,6 +661,7 @@ export default function App() {
   }, []);
 
   const closeAllModals = useCallback(() => {
+    setFormError("");
     setShowSettings(false);
     setShowAddAccount(false);
     setShowEditAccount(false);
@@ -674,6 +675,15 @@ export default function App() {
   const flashStatus = useCallback((msg: string) => {
     setStatusMessage(msg);
   }, []);
+
+  /** Lỗi nhập liệu trong hộp thoại: hiện ngay trên hộp thoại thay cho alert() của trình duyệt. */
+  const [formError, setFormError] = useState("");
+  const showFormError = useCallback((msg: string) => setFormError(msg), []);
+  useEffect(() => {
+    if (!formError) return;
+    const t = window.setTimeout(() => setFormError(""), 5000);
+    return () => window.clearTimeout(t);
+  }, [formError]);
 
   /* ----------------------------- Persistence ------------------------------ */
   useEffect(() => {
@@ -1604,13 +1614,13 @@ export default function App() {
     e.preventDefault();
     const name = newAccName.trim();
     if (!name) {
-      alert("Vui lòng nhập tên tài khoản.");
+      showFormError("Vui lòng nhập tên tài khoản.");
       return;
     }
     const plat = getPlatform(newAccPlatformId);
     const custom = newAccCustomUrl.trim();
     if (!custom && !plat.url) {
-      alert("Nền tảng này chưa có URL. Hãy nhập URL riêng cho tài khoản.");
+      showFormError("Nền tảng này chưa có URL. Hãy nhập URL riêng cho tài khoản.");
       return;
     }
 
@@ -1640,13 +1650,13 @@ export default function App() {
     if (!editingAccount) return;
     const name = editName.trim();
     if (!name) {
-      alert("Vui lòng nhập tên tài khoản.");
+      showFormError("Vui lòng nhập tên tài khoản.");
       return;
     }
     const custom = editCustomUrl.trim();
     const nextProxy = normalizeProxy(editProxy);
     if (nextProxy.enabled && (!nextProxy.host || !nextProxy.port)) {
-      alert("Proxy đang bật nhưng thiếu địa chỉ hoặc cổng.");
+      showFormError("Proxy đang bật nhưng thiếu địa chỉ hoặc cổng.");
       return;
     }
     const wasSelected = selectedAccountId === editingAccount.id;
@@ -1835,17 +1845,17 @@ export default function App() {
     const name = newPlatName.trim();
     const url = normalizeUrl(newPlatUrl);
     if (!name) {
-      alert("Vui lòng nhập tên nền tảng.");
+      showFormError("Vui lòng nhập tên nền tảng.");
       return;
     }
     if (!url) {
-      alert("Vui lòng nhập địa chỉ website.");
+      showFormError("Vui lòng nhập địa chỉ website.");
       return;
     }
     try {
       new URL(url);
     } catch {
-      alert("Địa chỉ website không hợp lệ.");
+      showFormError("Địa chỉ website không hợp lệ.");
       return;
     }
     const badge = (newPlatBadge.trim() || name.slice(0, 2)).toUpperCase().slice(0, 3);
@@ -1868,7 +1878,7 @@ export default function App() {
   const deletePlatform = (plat: PlatformItem) => {
     const used = accounts.filter((a) => a.platformId === plat.id).length;
     if (used > 0) {
-      alert(`Nền tảng "${plat.name}" đang có ${used} tài khoản. Hãy xóa các tài khoản đó trước.`);
+      showFormError(`Nền tảng "${plat.name}" đang có ${used} tài khoản. Hãy xóa các tài khoản đó trước.`);
       return;
     }
     if (!window.confirm(`Xóa nền tảng "${plat.name}"?`)) return;
@@ -1881,7 +1891,7 @@ export default function App() {
   const createGroup = () => {
     const name = newGroupName.trim();
     if (!name) {
-      alert("Vui lòng nhập tên nhóm.");
+      showFormError("Vui lòng nhập tên nhóm.");
       return;
     }
     if (editingGroupId) {
@@ -1942,7 +1952,7 @@ export default function App() {
     try {
       apply(await resizeImageToDataUrl(file));
     } catch (err) {
-      alert(String(err));
+      showFormError(String(err));
     }
   };
 
@@ -2662,6 +2672,16 @@ export default function App() {
       </main>
 
       {/* ------------------------------ MODALS ------------------------------ */}
+      {formError && (
+        <div
+          className="bch-form-error"
+          role="alert"
+          style={{ left: modalInset.left, right: modalInset.right }}
+          onClick={() => setFormError("")}
+        >
+          <span>⚠️ {formError}</span>
+        </div>
+      )}
       {showAddAccount && (
         <div
           className="bch-modal-overlay"
@@ -3694,7 +3714,7 @@ export default function App() {
 
             <div className="bch-accounts-container" style={{ maxHeight: 260 }}>
               {groups.length === 0 && (
-                <div className="bch-alert-box bch-alert-info">Chưa có nhóm nào.</div>
+                <div className="bch-empty-note">Chưa có nhóm nào. Nhập tên ở trên rồi bấm Thêm.</div>
               )}
               {groups.map((g) => (
                 <div
